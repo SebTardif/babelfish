@@ -47,13 +47,27 @@ type OpenClawCliProgram = {
   command(name: string): OpenClawCliCommand;
 };
 type OpenClawApi = {
+  config?: {
+    plugins?: {
+      entries?: Record<string, {
+        llm?: {
+          allowAgentIdOverride?: boolean;
+          allowModelOverride?: boolean;
+        };
+      }>;
+    };
+  };
   runtime?: {
     llm?: {
       complete(params: {
         messages: Array<{ role: "user"; content: string }>;
         maxTokens?: number;
         temperature?: number;
+        systemPrompt?: string;
         purpose?: string;
+        signal?: AbortSignal;
+        model?: string;
+        agentId?: string;
       }): Promise<{ text: string }>;
     };
   };
@@ -92,7 +106,6 @@ const UNSUPPORTED_WARNING_HOOKS = new Set([
 ]);
 
 const UNSUPPORTED_WARNING_MIDDLEWARE = new Set([
-  "llm_request",
   "llm_execution",
   "tool_execution",
 ]);
@@ -216,6 +229,21 @@ function firstString(results: unknown[]): string | undefined {
   return results.find((item): item is string => typeof item === "string" && item.length > 0);
 }
 
+function promptMutation(value: unknown): Record<string, string> | undefined {
+  const request = record(record(value).request);
+  const fields = {
+    systemPrompt: request.systemPrompt ?? request.system_prompt,
+    prependContext: request.prependContext ?? request.prepend_context,
+    appendContext: request.appendContext ?? request.append_context,
+    prependSystemContext: request.prependSystemContext ?? request.prepend_system_context,
+    appendSystemContext: request.appendSystemContext ?? request.append_system_context,
+  };
+  const mutation = Object.fromEntries(
+    Object.entries(fields).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+  return Object.keys(mutation).length > 0 ? mutation : undefined;
+}
+
 function textResult(text: string): Record<string, unknown> {
   return { content: [{ type: "text", text }] };
 }
@@ -228,12 +256,16 @@ function bundlePayload(eventName: string, event: unknown, ctx: unknown): Record<
   const raw = record(event);
   const runtime = context(ctx);
   const transcriptPath = raw.transcript_path ?? raw.transcriptPath;
+  const model = runtime.provider && runtime.model
+    ? `${runtime.provider}/${runtime.model}`
+    : runtime.model ?? "";
   return {
     ...hermesKwargs(raw),
     hook_event_name: eventName,
     cwd: runtime.workspace,
     session_id: runtime.sessionId ?? runtime.sessionKey ?? "",
-    model: runtime.model ?? "",
+    model,
+    agent_id: runtime.agentId ?? "",
     permission_mode: "default",
     transcript_path: typeof transcriptPath === "string" ? transcriptPath : null,
     turn_id: typeof raw.turnId === "string" ? raw.turnId : "",
@@ -247,7 +279,15 @@ async function bundleHooks(eventName: string, event: unknown, ctx: unknown, matc
 }
 
 function configurePromptHooks(api: OpenClawApi): void {
+  promptHookEvaluator = undefined;
   if (!api.runtime?.llm) return;
+  const policy = api.config?.plugins?.entries?.babelfish?.llm;
+  if (policy?.allowAgentIdOverride !== true || policy.allowModelOverride !== true) {
+    api.logger?.warn(
+      "Babelfish prompt hook handlers require plugins.entries.babelfish.llm agent and model override permissions",
+    );
+    return;
+  }
   promptHookEvaluator = async (template, payload, timeoutMs) => {
     const argumentsJson = JSON.stringify(payload);
     const prompt = template.includes("$ARGUMENTS")
@@ -255,12 +295,23 @@ function configurePromptHooks(api: OpenClawApi): void {
       : `${template}\n\n${argumentsJson}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const model = typeof payload.model === "string" && payload.model ? payload.model : undefined;
+    const agentId = typeof payload.agent_id === "string" && payload.agent_id
+      ? payload.agent_id
+      : undefined;
+    if (!model || !agentId) {
+      throw new Error("Prompt hook requires active OpenClaw agent and model context");
+    }
     const response = await api.runtime!.llm!.complete({
       messages: [{ role: "user", content: prompt }],
       maxTokens: 300,
       temperature: 0,
+      systemPrompt: 'Evaluate the hook instructions. Return only JSON: {"ok":true} to allow, or {"ok":false,"reason":"..."} to block.',
       purpose: "babelfish-hook-evaluation",
-    });
+      signal: controller.signal,
+      model,
+      agentId,
+    }).finally(() => clearTimeout(timer));
     const match = response.text.match(/\{[\s\S]*\}/);
     const decision = match ? record(JSON.parse(match[0])) : {};
     if (decision.ok === true) return undefined;
@@ -457,6 +508,19 @@ export function registerHermesCliCommands(
 }
 
 function registerRunHooks(api: OpenClawApi): void {
+  api.on("before_prompt_build", async (event, ctx) => {
+    const rawEvent = record(event);
+    const result = await invokeHermesMiddleware(
+      config,
+      {
+        kind: "llm_request",
+        kwargs: { ...hermesKwargs(rawEvent), request: rawEvent },
+        context: context(ctx),
+      },
+    );
+    return result.results.map(promptMutation).filter(Boolean).at(-1);
+  });
+
   api.on("before_agent_run", async (event, ctx) => {
     const imported = await bundleHooks("UserPromptSubmit", event, ctx);
     const block = imported.map(hookBlock).find((decision) => decision.block);
@@ -643,7 +707,6 @@ function registerSessionHooks(api: OpenClawApi): void {
 function registerMessageHooks(api: OpenClawApi): void {
   api.on("before_dispatch", async (event, ctx) => {
     const result = firstRecord((await invokeHook("pre_gateway_dispatch", event, ctx)).results);
-    // Hermes defines skip/rewrite/allow here; OpenClaw's stable result can only represent skip.
     if (result?.action === "skip") {
       return { handled: true };
     }

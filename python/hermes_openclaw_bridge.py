@@ -708,6 +708,8 @@ def _middleware(payload: dict[str, Any]) -> dict[str, Any]:
     invoked: list[dict[str, str]] = []
     original_args = kwargs.get("args") if isinstance(kwargs.get("args"), dict) else {}
     current_args = dict(original_args)
+    original_request = kwargs.get("request") if isinstance(kwargs.get("request"), dict) else {}
+    current_request = dict(original_request)
     changed = False
     for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
         _manifest, ctx = _load_plugin(plugin_dir)
@@ -718,6 +720,12 @@ def _middleware(payload: dict[str, Any]) -> dict[str, Any]:
             callback_kwargs = kwargs
             if kind == "tool_request":
                 callback_kwargs = {**kwargs, "args": current_args, "original_args": original_args}
+            elif kind == "llm_request":
+                callback_kwargs = {
+                    **kwargs,
+                    "request": current_request,
+                    "original_request": original_request,
+                }
             try:
                 result = _invoke_event_callback(middleware.callback, callback_kwargs)
             except Exception as exc:
@@ -733,8 +741,17 @@ def _middleware(payload: dict[str, Any]) -> dict[str, Any]:
                 ):
                     current_args = dict(json_result["args"])
                     changed = True
+                elif (
+                    kind == "llm_request"
+                    and isinstance(json_result, dict)
+                    and isinstance(json_result.get("request"), dict)
+                ):
+                    current_request = dict(json_result["request"])
+                    changed = True
     if kind == "tool_request" and changed:
         results = [{"args": current_args}]
+    elif kind == "llm_request" and changed:
+        results = [{"request": current_request}]
     return {"middleware": kind, "invoked": invoked, "results": results}
 
 

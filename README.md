@@ -113,7 +113,7 @@ format does not provide that surface.
 | Prompt or agent hook handlers | N/A | No | Partial | Claude prompt handlers use the active OpenClaw model; Codex prompt handlers and multi-turn agent handlers remain listed only |
 | Notification hooks | N/A | N/A | No | Detected but not executed |
 | Tool-result middleware | Full | N/A | N/A | Maps to OpenClaw tool-result middleware |
-| LLM/request/execution middleware | No | N/A | N/A | Detected and reported; no stable equivalent is used |
+| LLM/request/execution middleware | Partial | N/A | N/A | Request rewrites of OpenClaw system/context fields map to prompt-build hooks; provider and execution wrappers are reported but not run |
 | Codex app connectors | N/A | No | N/A | Connector IDs are not MCP servers and have no current equivalent |
 | LSP servers | N/A | N/A | No | Detected but not started |
 | Monitors | N/A | N/A | Partial | Always-on monitors run for the session and queue bounded stdout context; skill-triggered monitors are listed only |
@@ -133,8 +133,9 @@ converted to user-invoked OpenClaw skills.
 
 Command hooks run with `${CLAUDE_PLUGIN_ROOT}` set to the installed plugin
 directory. `command` handlers are supported. Single-turn `prompt` handlers use
-the active OpenClaw model; multi-turn `agent` handlers are reported as
-unsupported.
+the active OpenClaw agent and model when `plugins.entries.babelfish.llm` allows
+both agent and model overrides. Without those trust flags they are reported but
+not executed. Multi-turn `agent` handlers are unsupported.
 
 ### Codex
 

@@ -60,6 +60,16 @@ def _context(**kwargs):
     return {"context": "fixture context"}
 
 
+def _llm_request(request, **kwargs):
+    return {
+        "request": {
+            **request,
+            "prepend_context": "middleware context",
+            "appendSystemContext": "middleware system context",
+        }
+    }
+
+
 def _record_api_hook(name):
     def record(**kwargs):
         target = os.environ.get("BABELFISH_TEST_HOOK_LOG")
@@ -112,6 +122,7 @@ def register(ctx):
     ctx.register_hook("post_api_request", _record_api_hook("post_api_request"))
     ctx.register_hook("api_request_error", _record_api_hook("api_request_error"))
     ctx.register_hook("on_session_start", _set_state)
+    ctx.register_middleware("llm_request", _llm_request)
     ctx.register_command("simple", lambda raw: {"command": raw}, "Simple command", "<raw text>")
     ctx.register_cli_command(
         "simplecli",

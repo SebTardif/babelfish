@@ -48,6 +48,15 @@ describe("native OpenClaw hook entry", () => {
       const entry = module.default;
       const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
       const api = {
+        config: {
+          plugins: {
+            entries: {
+              babelfish: {
+                llm: { allowAgentIdOverride: true, allowModelOverride: true },
+              },
+            },
+          },
+        },
         logger: { warn: vi.fn() },
         runtime: { llm: { complete: vi.fn(async () => ({ text: '{"ok":false,"reason":"model denied"}' })) } },
         on: vi.fn((name: string, handler: (event: unknown, ctx: unknown) => unknown) => {
@@ -62,6 +71,15 @@ describe("native OpenClaw hook entry", () => {
       entry.register(api);
 
       expect(api.on).toHaveBeenCalledWith("before_tool_call", expect.any(Function));
+      await expect(
+        hooks.get("before_prompt_build")?.(
+          { prompt: "hello", messages: [] },
+          { sessionId: "session-1" },
+        ),
+      ).resolves.toEqual({
+        prependContext: "middleware context",
+        appendSystemContext: "middleware system context",
+      });
       await expect(
         hooks.get("before_tool_call")?.({ toolName: "blocked" }, { sessionId: "session-1" }),
       ).resolves.toEqual({ block: true, blockReason: "blocked" });
@@ -103,11 +121,37 @@ describe("native OpenClaw hook entry", () => {
         hooks.get("agent_turn_prepare")?.({}, { runId: "run-context" }),
       ).resolves.toEqual({ prependContext: "fixture context" });
       await expect(
-        hooks.get("before_agent_finalize")?.({ sessionId: "session-1" }, { sessionId: "session-1" }),
+        hooks.get("before_agent_finalize")?.(
+          { sessionId: "session-1" },
+          {
+            sessionId: "session-1",
+            agentId: "review-agent",
+            modelProviderId: "openai",
+            modelId: "gpt-5.5",
+          },
+        ),
       ).resolves.toMatchObject({ action: "revise", reason: "model denied" });
       expect(api.runtime.llm.complete).toHaveBeenCalledWith(expect.objectContaining({
+        agentId: "review-agent",
+        model: "openai/gpt-5.5",
         purpose: "babelfish-hook-evaluation",
+        systemPrompt: expect.stringContaining('{"ok":true}'),
       }));
+
+      const hooksWithoutLlm = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+      entry.register({
+        on: vi.fn((name: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+          hooksWithoutLlm.set(name, handler);
+        }),
+        registerTool: vi.fn(),
+        registerCommand: vi.fn(),
+        registerCli: vi.fn(),
+        registerAgentToolResultMiddleware: vi.fn(),
+      });
+      await expect(
+        hooksWithoutLlm.get("before_agent_finalize")?.({}, {}),
+      ).resolves.toBeUndefined();
+      expect(api.runtime.llm.complete).toHaveBeenCalledOnce();
 
       await hooks.get("model_call_ended")?.({ outcome: "error" }, { sessionId: "session-1" });
       await hooks.get("model_call_ended")?.({ outcome: "success" }, { sessionId: "session-1" });
