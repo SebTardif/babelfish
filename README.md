@@ -103,7 +103,7 @@ format does not provide that surface.
 | Session start hooks | Full | Full | Full | Additional context is injected into the next agent turn |
 | Session end hooks | Full | Full | Full | Codex hooks must be declared by its supported manifest or conventional path |
 | User-prompt hooks | Partial | Partial | Partial | Additional context maps; prompt replacement and hard stop do not |
-| Stop/finalization hooks | Partial | Full | Full | Codex and Claude continue/block decisions map directly |
+| Stop/finalization hooks | Full | Full | Full | Hermes finalization is observer-only; Codex and Claude continue/block decisions map directly |
 | Pre/post compaction hooks | N/A | Full | Full | Observation hooks run around OpenClaw compaction |
 | Subagent lifecycle hooks | Full | Full | Full | Mapped to OpenClaw subagent start/end hooks |
 | Prompt or agent hook handlers | N/A | No | No | Only command hook handlers execute |
