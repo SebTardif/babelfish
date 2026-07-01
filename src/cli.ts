@@ -1,5 +1,6 @@
-import { resolveConfig } from "./config.js";
-import { installHermesPlugin, uninstallHermesPlugin } from "./git-install.js";
+import { inspectBundlePlugin, listBundlePlugins, summarizeBundlePlugin, validateBundlePluginDirectory } from "./bundle-plugins.js";
+import { appInstallDir, resolveConfig, SUPPORTED_APPS, type SupportedApp } from "./config.js";
+import { installPlugin, uninstallPlugin, validateHermesPluginDirectory } from "./git-install.js";
 import { listHermesPlugins } from "./hermes-python.js";
 import { regenerateNativeTools } from "./native-tools.js";
 
@@ -22,9 +23,9 @@ function usage(): string {
   ].join("\n");
 }
 
-function requireApp(value: string | undefined): "hermes" {
-  if (value === "hermes") {
-    return value;
+function requireApp(value: string | undefined): SupportedApp {
+  if (SUPPORTED_APPS.includes(value as SupportedApp)) {
+    return value as SupportedApp;
   }
   throw new Error(`Unsupported app: ${value || "(missing)"}`);
 }
@@ -46,12 +47,22 @@ export async function runBabelfishCli(args: string[]): Promise<void> {
   if (command === "list") {
     const app = args[1];
     if (app) {
-      requireApp(app);
-      console.log(JSON.stringify({ app, ...(await listHermesPlugins(config)) }, null, 2));
+      const supported = requireApp(app);
+      console.log(JSON.stringify(
+        supported === "hermes"
+          ? { app: supported, ...(await listHermesPlugins(config)) }
+          : { app: supported, plugins: (await listBundlePlugins(config, supported)).map(summarizeBundlePlugin) },
+        null,
+        2,
+      ));
       return;
     }
     console.log(
-      JSON.stringify({ apps: [{ app: "hermes", ...(await listHermesPlugins(config)) }] }, null, 2),
+      JSON.stringify({ apps: [
+        { app: "hermes", ...(await listHermesPlugins(config)) },
+        { app: "claude-code", plugins: (await listBundlePlugins(config, "claude-code")).map(summarizeBundlePlugin) },
+        { app: "codex", plugins: (await listBundlePlugins(config, "codex")).map(summarizeBundlePlugin) },
+      ] }, null, 2),
     );
     return;
   }
@@ -63,16 +74,22 @@ export async function runBabelfishCli(args: string[]): Promise<void> {
       throw new Error(usage());
     }
     let generated: Awaited<ReturnType<typeof regenerateNativeTools>> | undefined;
-    const result = await installHermesPlugin({
-      installDir: config.installDir,
+    const result = await installPlugin({
+      installDir: appInstallDir(config, app),
       source,
       name: readOptionValue(args, "--name"),
       force: args.includes("--force"),
+      validate: app === "hermes"
+        ? validateHermesPluginDirectory
+        : (target) => validateBundlePluginDirectory(app, target),
       afterChange: async () => {
         generated = await regenerateNativeTools(config);
       },
     });
-    console.log(JSON.stringify({ app, installed: result, ...generated }, null, 2));
+    const plugin = app === "hermes"
+      ? undefined
+      : summarizeBundlePlugin(await inspectBundlePlugin(app, result.path));
+    console.log(JSON.stringify({ app, installed: result, plugin, ...generated }, null, 2));
     return;
   }
 
@@ -83,8 +100,8 @@ export async function runBabelfishCli(args: string[]): Promise<void> {
       throw new Error(usage());
     }
     let generated: Awaited<ReturnType<typeof regenerateNativeTools>> | undefined;
-    const result = await uninstallHermesPlugin({
-      installDir: config.installDir,
+    const result = await uninstallPlugin({
+      installDir: appInstallDir(config, app),
       name,
       afterChange: async () => {
         generated = await regenerateNativeTools(config);
