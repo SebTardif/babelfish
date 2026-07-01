@@ -10,6 +10,7 @@
   },
   "files": [
     "openclaw.plugin.json",
+    "assets/",
     "mcp/",
     "skills/",
     "dist/",
