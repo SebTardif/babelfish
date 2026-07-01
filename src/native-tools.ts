@@ -2,7 +2,14 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { HermesBridgeConfig } from "./config.js";
+import { SUPPORTED_APPS, type BabelfishConfig, type SupportedApp } from "./config.js";
+import {
+  callBundleTool,
+  listBundlePlugins,
+  listBundleServerTools,
+  summarizeBundlePlugin,
+  type BundlePlugin,
+} from "./bundle-plugins.js";
 import {
   callHermesTool,
   listHermesPlugins,
@@ -15,9 +22,6 @@ import { syncHermesSkills } from "./skill-sync.js";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const generatedRegistryFile = "babelfish.generated.json";
-
-export const SUPPORTED_APPS = ["hermes"] as const;
-export type SupportedApp = (typeof SUPPORTED_APPS)[number];
 
 export const NATIVE_BRIDGE_TOOL_NAMES = ["babelfish_plugins_list"] as const;
 
@@ -63,7 +67,7 @@ export type NativeTool = {
     toolCallId: string,
     params: unknown,
     signal?: AbortSignal,
-  ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: unknown }>;
+  ): Promise<{ content: unknown[]; details?: unknown }>;
 };
 
 export type NativeToolEntry = {
@@ -74,6 +78,7 @@ export type NativeToolEntry = {
   originalName: string;
   description: string;
   inputSchema: JsonObject;
+  server?: string;
 };
 
 export type GeneratedCommandEntry = {
@@ -88,6 +93,8 @@ export type GeneratedCommandEntry = {
 export type GeneratedNativeToolRegistry = {
   generatedAt: string;
   installDir: string;
+  skillDirs: string[];
+  unsupported: Array<{ app: SupportedApp; plugin: string; surface: string }>;
   tools: NativeToolEntry[];
   commands: GeneratedCommandEntry[];
   cliCommands: GeneratedCommandEntry[];
@@ -104,15 +111,23 @@ function sanitizeName(value: string): string {
   return cleaned || "plugin";
 }
 
+function skillSlug(value: string): string {
+  return sanitizeName(value).replaceAll("_", "-").toLowerCase();
+}
+
 function stringifyResult(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
 
 function supportedApp(value: unknown): SupportedApp {
-  if (value === "hermes") {
+  if (value === "hermes" || value === "claude-code" || value === "codex") {
     return value;
   }
   throw new Error(`Unsupported app: ${String(value || "(missing)")}`);
+}
+
+function isSupportedApp(value: unknown): value is SupportedApp {
+  return SUPPORTED_APPS.includes(value as SupportedApp);
 }
 
 function result(value: unknown): { content: Array<{ type: "text"; text: string }>; details: unknown } {
@@ -150,6 +165,17 @@ function uniqueName(base: string, used: Set<string>): string {
   let suffix = 2;
   while (used.has(candidate)) {
     candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+function uniqueSkillName(base: string, used: Set<string>): string {
+  let candidate = base.replaceAll("_", "-");
+  let suffix = 2;
+  while (used.has(candidate)) {
+    candidate = `${base.replaceAll("_", "-")}-${suffix}`;
     suffix += 1;
   }
   used.add(candidate);
@@ -260,6 +286,12 @@ export function readGeneratedNativeToolRegistry(root = packageRoot): GeneratedNa
     return {
       generatedAt: typeof parsed.generatedAt === "string" ? parsed.generatedAt : "",
       installDir: typeof parsed.installDir === "string" ? parsed.installDir : "",
+      skillDirs: Array.isArray(parsed.skillDirs)
+        ? parsed.skillDirs.filter((entry): entry is string => typeof entry === "string")
+        : [],
+      unsupported: Array.isArray(parsed.unsupported)
+        ? parsed.unsupported.filter(isUnsupportedEntry)
+        : [],
       tools: Array.isArray(parsed.tools) ? parsed.tools.filter(isNativeToolEntry) : [],
       commands: Array.isArray(parsed.commands) ? parsed.commands.filter(isCommandEntry) : [],
       cliCommands: Array.isArray(parsed.cliCommands)
@@ -270,7 +302,15 @@ export function readGeneratedNativeToolRegistry(root = packageRoot): GeneratedNa
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
-    return { generatedAt: "", installDir: "", tools: [], commands: [], cliCommands: [] };
+    return {
+      generatedAt: "",
+      installDir: "",
+      skillDirs: [],
+      unsupported: [],
+      tools: [],
+      commands: [],
+      cliCommands: [],
+    };
   }
 }
 
@@ -278,7 +318,7 @@ function isNativeToolEntry(value: unknown): value is NativeToolEntry {
   const item = asObject(value);
   return (
     item?.kind === "tool" &&
-    item.app === "hermes" &&
+    isSupportedApp(item.app) &&
     typeof item.name === "string" &&
     typeof item.plugin === "string" &&
     typeof item.originalName === "string" &&
@@ -287,11 +327,20 @@ function isNativeToolEntry(value: unknown): value is NativeToolEntry {
   );
 }
 
+function isUnsupportedEntry(
+  value: unknown,
+): value is GeneratedNativeToolRegistry["unsupported"][number] {
+  const item = asObject(value);
+  return Boolean(
+    item && isSupportedApp(item.app) && typeof item.plugin === "string" && typeof item.surface === "string",
+  );
+}
+
 function isCommandEntry(value: unknown): value is GeneratedCommandEntry {
   const item = asObject(value);
   return (
     typeof item?.name === "string" &&
-    item.app === "hermes" &&
+    isSupportedApp(item.app) &&
     typeof item.plugin === "string" &&
     typeof item.originalName === "string" &&
     typeof item.description === "string" &&
@@ -299,12 +348,13 @@ function isCommandEntry(value: unknown): value is GeneratedCommandEntry {
   );
 }
 
-async function writeManifestTools(names: string[], root: string): Promise<void> {
+async function writeManifest(names: string[], skillDirs: string[], root: string): Promise<void> {
   const target = manifestPath(root);
   const manifest = JSON.parse(await fsp.readFile(target, "utf8")) as JsonObject;
   const contracts = asObject(manifest.contracts) ?? {};
   contracts.tools = names;
   manifest.contracts = contracts;
+  manifest.skills = ["skills", ...skillDirs];
   await fsp.writeFile(target, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
@@ -327,8 +377,169 @@ async function restoreFile(target: string, contents: string | undefined): Promis
   }
 }
 
+function convertedSkillMarkdown(name: string, source: string): string {
+  let body = source;
+  let description = `Imported plugin command ${name}`;
+  if (source.startsWith("---\n")) {
+    const end = source.indexOf("\n---\n", 4);
+    if (end >= 0) {
+      const frontmatter = source.slice(4, end);
+      const match = frontmatter.match(/^description:\s*(.+)$/m);
+      if (match?.[1]) {
+        description = match[1].trim().replace(/^['"]|['"]$/g, "");
+      }
+      body = source.slice(end + 5);
+    }
+  }
+  return [
+    "---",
+    `name: ${name}`,
+    `description: ${JSON.stringify(description)}`,
+    "disable-model-invocation: true",
+    "---",
+    "",
+    body.trim(),
+    "",
+  ].join("\n");
+}
+
+function renamedSkillMarkdown(name: string, source: string): string {
+  if (!source.startsWith("---\n")) {
+    return convertedSkillMarkdown(name, source);
+  }
+  const end = source.indexOf("\n---\n", 4);
+  if (end < 0) {
+    return convertedSkillMarkdown(name, source);
+  }
+  const frontmatter = source.slice(4, end);
+  const renamed = /^name:/m.test(frontmatter)
+    ? frontmatter.replace(/^name:.*$/m, `name: ${name}`)
+    : `name: ${name}\n${frontmatter}`;
+  return `---\n${renamed}\n---\n${source.slice(end + 5)}`;
+}
+
+async function copySkillDirectory(source: string, target: string, name: string): Promise<void> {
+  await assertNoSymlinks(source);
+  await fsp.cp(source, target, { recursive: true });
+  const skillFile = path.join(target, "SKILL.md");
+  await fsp.writeFile(
+    skillFile,
+    renamedSkillMarkdown(name, await fsp.readFile(skillFile, "utf8")),
+  );
+}
+
+async function assertNoSymlinks(root: string): Promise<void> {
+  for (const entry of await fsp.readdir(root, { withFileTypes: true })) {
+    const target = path.join(root, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Imported skill tree contains a symlink: ${target}`);
+    }
+    if (entry.isDirectory()) {
+      await assertNoSymlinks(target);
+    }
+  }
+}
+
+async function importSkillEntries(
+  sourceRoot: string,
+  relative: string,
+  targetRoot: string,
+  prefix: string,
+  usedNames: Set<string>,
+): Promise<void> {
+  for (const entry of await fsp.readdir(path.join(sourceRoot, relative), { withFileTypes: true })) {
+    const nextRelative = path.join(relative, entry.name);
+    const source = path.join(sourceRoot, nextRelative);
+    const name = uniqueSkillName(
+      `${prefix}-${skillSlug(nextRelative.replace(/\.md$/i, ""))}`,
+      usedNames,
+    );
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Imported skill tree contains a symlink: ${source}`);
+    }
+    if (entry.isDirectory() && fs.existsSync(path.join(source, "SKILL.md"))) {
+      await copySkillDirectory(source, path.join(targetRoot, name), name);
+    } else if (entry.isDirectory()) {
+      await importSkillEntries(sourceRoot, nextRelative, targetRoot, prefix, usedNames);
+    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+      const target = path.join(targetRoot, name);
+      await fsp.mkdir(target, { recursive: true });
+      await fsp.writeFile(
+        path.join(target, "SKILL.md"),
+        convertedSkillMarkdown(name, await fsp.readFile(source, "utf8")),
+      );
+    }
+  }
+}
+
+async function syncBundleSkills(plugins: BundlePlugin[], root: string): Promise<string[]> {
+  const targetRoot = path.join(root, "skills", "babelfish-bundles");
+  await fsp.rm(targetRoot, { recursive: true, force: true });
+  await fsp.mkdir(targetRoot, { recursive: true });
+  const usedNames = new Set<string>();
+  for (const plugin of plugins) {
+    for (const sourceRoot of plugin.skillDirs) {
+      const directSkill = path.join(sourceRoot, "SKILL.md");
+      if (fs.existsSync(directSkill)) {
+        const name = uniqueSkillName(
+          `${skillSlug(plugin.app)}-${skillSlug(plugin.key)}-${skillSlug(path.basename(sourceRoot))}`,
+          usedNames,
+        );
+        await copySkillDirectory(sourceRoot, path.join(targetRoot, name), name);
+        continue;
+      }
+      await importSkillEntries(
+        sourceRoot,
+        "",
+        targetRoot,
+        `${skillSlug(plugin.app)}-${skillSlug(plugin.key)}`,
+        usedNames,
+      );
+    }
+  }
+  return ["skills/babelfish-bundles"];
+}
+
+async function buildBundleToolEntries(
+  plugins: BundlePlugin[],
+  reservedNames: string[],
+  timeoutMs: number,
+): Promise<NativeToolEntry[]> {
+  const entries: NativeToolEntry[] = [];
+  for (const plugin of plugins) {
+    for (const server of plugin.servers) {
+      for (const tool of await listBundleServerTools(plugin, server, timeoutMs)) {
+        entries.push({
+          kind: "tool",
+          app: plugin.app,
+          name: tool.name,
+          plugin: plugin.key,
+          server: server.name,
+          originalName: tool.name,
+          description: tool.description || `MCP tool ${plugin.key}/${server.name}/${tool.name}`,
+          inputSchema: tool.inputSchema,
+        });
+      }
+    }
+  }
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    counts.set(entry.name, (counts.get(entry.name) ?? 0) + 1);
+  }
+  const used = new Set<string>([...NATIVE_BRIDGE_TOOL_NAMES, ...reservedNames]);
+  return entries.map((entry) => ({
+    ...entry,
+    name: uniqueName(
+      counts.get(entry.name) === 1 && !used.has(entry.name)
+        ? entry.name
+        : `${sanitizeName(entry.plugin)}__${sanitizeName(entry.name)}`,
+      used,
+    ),
+  }));
+}
+
 export async function regenerateNativeTools(
-  config: HermesBridgeConfig,
+  config: BabelfishConfig,
   options: { root?: string } = {},
 ): Promise<{ generatedTools: string[]; restartRequired: true }> {
   const root = options.root ?? packageRoot;
@@ -342,11 +553,17 @@ export async function regenerateNativeTools(
     );
   }
   const tools = buildNativeToolEntries(list);
+  const bundlePlugins = await listBundlePlugins(config);
+  tools.push(...await buildBundleToolEntries(bundlePlugins, tools.map((tool) => tool.name), config.timeoutMs));
   const commands = buildCommandEntries(list, (plugin) => plugin.commands, OPENCLAW_RESERVED_COMMANDS);
   const cliCommands = buildCommandEntries(list, (plugin) => plugin.cliCommands ?? [], OPENCLAW_CLI_ROOTS);
   const registry: GeneratedNativeToolRegistry = {
     generatedAt: new Date().toISOString(),
     installDir: list.installDir,
+    skillDirs: bundlePlugins.flatMap((plugin) => plugin.skillDirs),
+    unsupported: bundlePlugins.flatMap((plugin) =>
+      plugin.unsupported.map((surface) => ({ app: plugin.app, plugin: plugin.key, surface })),
+    ),
     tools,
     commands,
     cliCommands,
@@ -354,6 +571,7 @@ export async function regenerateNativeTools(
   const registryTarget = registryPath(root);
   const manifestTarget = manifestPath(root);
   const skillsTarget = path.join(root, "skills", "babelfish-generated");
+  const bundleSkillsTarget = path.join(root, "skills", "babelfish-bundles");
   const backupRoot = path.join(root, `.babelfish-regenerate-${process.pid}-${Date.now()}`);
   const previousRegistry = await readOptionalFile(registryTarget);
   const previousManifest = await readOptionalFile(manifestTarget);
@@ -362,16 +580,30 @@ export async function regenerateNativeTools(
     await fsp.mkdir(backupRoot, { recursive: true });
     await fsp.cp(skillsTarget, path.join(backupRoot, "skills"), { recursive: true });
   }
+  const hadBundleSkills = fs.existsSync(bundleSkillsTarget);
+  if (hadBundleSkills) {
+    await fsp.mkdir(backupRoot, { recursive: true });
+    await fsp.cp(bundleSkillsTarget, path.join(backupRoot, "bundle-skills"), { recursive: true });
+  }
   try {
+    const manifestSkillDirs = await syncBundleSkills(bundlePlugins, root);
     await fsp.writeFile(registryTarget, `${JSON.stringify(registry, null, 2)}\n`);
-    await writeManifestTools([...NATIVE_BRIDGE_TOOL_NAMES, ...tools.map((tool) => tool.name)], root);
+    await writeManifest(
+      [...NATIVE_BRIDGE_TOOL_NAMES, ...tools.map((tool) => tool.name)],
+      manifestSkillDirs,
+      root,
+    );
     await syncHermesSkills(config, root);
   } catch (error) {
     await restoreFile(registryTarget, previousRegistry);
     await restoreFile(manifestTarget, previousManifest);
     await fsp.rm(skillsTarget, { recursive: true, force: true });
+    await fsp.rm(bundleSkillsTarget, { recursive: true, force: true });
     if (hadSkills) {
       await fsp.cp(path.join(backupRoot, "skills"), skillsTarget, { recursive: true });
+    }
+    if (hadBundleSkills) {
+      await fsp.cp(path.join(backupRoot, "bundle-skills"), bundleSkillsTarget, { recursive: true });
     }
     throw error;
   } finally {
@@ -392,7 +624,7 @@ function runtimeContext(ctx: NativeToolContext): HermesRuntimeContext {
   };
 }
 
-function bridgeTools(config: HermesBridgeConfig): NativeTool[] {
+function bridgeTools(config: BabelfishConfig): NativeTool[] {
   return [
     {
       name: "babelfish_plugins_list",
@@ -408,16 +640,26 @@ function bridgeTools(config: HermesBridgeConfig): NativeTool[] {
         const rawApp = asObject(params)?.app;
         if (rawApp !== undefined) {
           const app = supportedApp(rawApp);
-          return result({ app, ...(await listHermesPlugins(config)) });
+          return result(
+            app === "hermes"
+              ? { app, ...(await listHermesPlugins(config)) }
+              : { app, plugins: (await listBundlePlugins(config, app)).map(summarizeBundlePlugin) },
+          );
         }
-        return result({ apps: [{ app: "hermes", ...(await listHermesPlugins(config)) }] });
+        return result({
+          apps: [
+            { app: "hermes", ...(await listHermesPlugins(config)) },
+            { app: "claude-code", plugins: (await listBundlePlugins(config, "claude-code")).map(summarizeBundlePlugin) },
+            { app: "codex", plugins: (await listBundlePlugins(config, "codex")).map(summarizeBundlePlugin) },
+          ],
+        });
       },
     },
   ];
 }
 
 function generatedTools(
-  config: HermesBridgeConfig,
+  config: BabelfishConfig,
   entries: NativeToolEntry[],
   ctx: NativeToolContext,
 ): NativeTool[] {
@@ -426,6 +668,37 @@ function generatedTools(
     description: entry.description,
     parameters: entry.inputSchema,
     execute: async (_toolCallId, params, signal) => {
+      const app = entry.app ?? "hermes";
+      if (app !== "hermes") {
+        const plugin = (await listBundlePlugins(config, app)).find(
+          (candidate) => candidate.key === entry.plugin,
+        );
+        const server = plugin?.servers.find((candidate) => candidate.name === entry.server);
+        if (!plugin || !server) {
+          throw new Error(`Imported MCP tool source is no longer installed: ${entry.name}`);
+        }
+        const toolResult = await callBundleTool(
+          plugin,
+          server,
+          entry.originalName,
+          asObject(params) ?? {},
+          signal,
+          config.timeoutMs,
+        );
+        const content = Array.isArray(toolResult.content)
+          ? normalizeMcpContent(toolResult.content)
+          : [{ type: "text", text: stringifyResult(toolResult) }];
+        if (toolResult.isError) {
+          const message = content
+            .filter((item): item is { type: "text"; text: string } =>
+              asObject(item)?.type === "text" && typeof asObject(item)?.text === "string"
+            )
+            .map((item) => item.text)
+            .join("\n") || `Imported MCP tool failed: ${entry.name}`;
+          throw new Error(message);
+        }
+        return { content, details: toolResult };
+      }
       const openclawContext = runtimeContext(ctx);
       const tool = await callHermesTool(
         config,
@@ -442,8 +715,25 @@ function generatedTools(
   }));
 }
 
+export function normalizeMcpContent(content: unknown[]): Array<Record<string, unknown>> {
+  return content.map((item) => {
+    const block = asObject(item);
+    if (block?.type === "text" && typeof block.text === "string") {
+      return { type: "text", text: block.text };
+    }
+    if (block?.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string") {
+      return { type: "image", data: block.data, mimeType: block.mimeType };
+    }
+    const resource = asObject(block?.resource);
+    if (block?.type === "resource" && typeof resource?.text === "string") {
+      return { type: "text", text: resource.text };
+    }
+    return { type: "text", text: stringifyResult(item) };
+  });
+}
+
 export function createNativeTools(
-  config: HermesBridgeConfig,
+  config: BabelfishConfig,
   entries: NativeToolEntry[],
   ctx: NativeToolContext,
 ): NativeTool[] {

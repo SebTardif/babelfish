@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { buildNativeToolEntries, regenerateNativeTools } from "./native-tools.js";
+import { buildNativeToolEntries, normalizeMcpContent, regenerateNativeTools } from "./native-tools.js";
 
 async function copyFixture(target: string): Promise<void> {
   const fixture = path.join(process.cwd(), "test/fixtures/simple-hermes-plugin");
@@ -50,6 +50,20 @@ async function writeNamedCommandFixture(root: string, plugin: string, command: s
 }
 
 describe("native generated tools", () => {
+  it("maps MCP result blocks to OpenClaw text and image content", () => {
+    expect(normalizeMcpContent([
+      { type: "text", text: "ok" },
+      { type: "image", data: "abc", mimeType: "image/png" },
+      { type: "resource", resource: { text: "embedded" } },
+      { type: "audio", data: "sound", mimeType: "audio/wav" },
+    ])).toEqual([
+      { type: "text", text: "ok" },
+      { type: "image", data: "abc", mimeType: "image/png" },
+      { type: "text", text: "embedded" },
+      { type: "text", text: expect.stringContaining('"type": "audio"') },
+    ]);
+  });
+
   it("suffixes generated tool names that collide after sanitizing", () => {
     const tools = buildNativeToolEntries({
       installDir: "/tmp/hermes",
@@ -304,5 +318,27 @@ describe("native generated tools", () => {
     await expect(fs.readFile(path.join(root, "babelfish.generated.json"), "utf8")).resolves.toBe(
       registry,
     );
+  });
+
+  it("qualifies copied skills and imports nested command markdown", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-bundle-state-"));
+    const plugin = path.join(stateRoot, "claude-code", "fixture");
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-package-"));
+    await fs.mkdir(path.join(plugin, ".claude-plugin"), { recursive: true });
+    await fs.writeFile(path.join(plugin, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "fixture" }));
+    await fs.mkdir(path.join(plugin, "skills", "review"), { recursive: true });
+    await fs.writeFile(path.join(plugin, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: review\n---\n");
+    await fs.mkdir(path.join(plugin, "commands", "git"), { recursive: true });
+    await fs.writeFile(path.join(plugin, "commands", "git", "commit.md"), "Commit the change.");
+    await fs.mkdir(path.join(root, "skills"));
+    await fs.writeFile(path.join(root, "openclaw.plugin.json"), JSON.stringify({ id: "babelfish", contracts: {} }));
+    await regenerateNativeTools(
+      { installDir: path.join(stateRoot, "hermes"), rootDir: stateRoot, python: "python3", timeoutMs: 1000, env: {} },
+      { root },
+    );
+    await expect(fs.readFile(path.join(root, "skills", "babelfish-bundles", "claude-code-fixture-review", "SKILL.md"), "utf8"))
+      .resolves.toContain("name: claude-code-fixture-review");
+    await expect(fs.readFile(path.join(root, "skills", "babelfish-bundles", "claude-code-fixture-git-commit", "SKILL.md"), "utf8"))
+      .resolves.toContain("Commit the change.");
   });
 });

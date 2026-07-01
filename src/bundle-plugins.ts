@@ -1,0 +1,676 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { BabelfishConfig, SupportedApp } from "./config.js";
+import { appInstallDir } from "./config.js";
+
+type JsonObject = Record<string, unknown>;
+
+const SUPPORTED_HOOK_EVENTS = new Set([
+  "PreToolUse",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "PreCompact",
+  "PostCompact",
+  "SessionStart",
+  "SessionEnd",
+  "UserPromptSubmit",
+  "SubagentStart",
+  "SubagentStop",
+  "Stop",
+]);
+
+export type BundleServer = {
+  name: string;
+  config: JsonObject;
+  baseDir: string;
+};
+
+export type BundleHook = {
+  event: string;
+  matcher?: string;
+  command: string;
+  timeoutMs: number;
+};
+
+export type BundlePlugin = {
+  app: Exclude<SupportedApp, "hermes">;
+  key: string;
+  name: string;
+  version: string;
+  description: string;
+  path: string;
+  skillDirs: string[];
+  servers: BundleServer[];
+  hooks: BundleHook[];
+  unsupported: string[];
+};
+
+function object(value: unknown): JsonObject | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : undefined;
+}
+
+function strings(value: unknown): string[] {
+  if (typeof value === "string") {
+    return value.trim() ? [value.trim()] : [];
+  }
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : [];
+}
+
+async function readJson(target: string): Promise<JsonObject | undefined> {
+  try {
+    return object(JSON.parse(await fs.readFile(target, "utf8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw new Error(`Could not parse ${target}: ${(error as Error).message}`);
+  }
+}
+
+function manifestPath(app: BundlePlugin["app"], root: string): string {
+  return path.join(root, app === "codex" ? ".codex-plugin" : ".claude-plugin", "plugin.json");
+}
+
+function relativePaths(value: unknown, fallback: string[]): string[] {
+  const declared = strings(value);
+  return [...new Set(
+    [...fallback, ...declared].map((entry) => path.normalize(entry).replace(/[\\/]+$/, "")),
+  )];
+}
+
+function underRoot(root: string, value: string): string {
+  const resolved = path.resolve(root, value);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Plugin path escapes its root: ${value}`);
+  }
+  return resolved;
+}
+
+async function existingPaths(root: string, paths: string[]): Promise<string[]> {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const realRoot = await fs.realpath(root);
+  for (const candidate of paths) {
+    const resolved = underRoot(root, candidate);
+    try {
+      const real = await fs.realpath(resolved);
+      const relative = path.relative(realRoot, real);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        throw new Error(`Plugin path escapes its root through a symlink: ${candidate}`);
+      }
+      if (!seen.has(real)) {
+        seen.add(real);
+        found.push(real);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  return found;
+}
+
+async function readServers(root: string, files: string[]): Promise<BundleServer[]> {
+  const servers: BundleServer[] = [];
+  for (const file of files) {
+    const target = underRoot(root, file);
+    const raw = await readJson(target);
+    if (!raw) {
+      continue;
+    }
+    const map = object(raw.mcpServers) ?? raw;
+    for (const [name, config] of Object.entries(map)) {
+      const normalized = object(config);
+      if (normalized) {
+        servers.push({ name, config: normalized, baseDir: path.dirname(target) });
+      }
+    }
+  }
+  return servers;
+}
+
+function inlineServers(value: unknown): BundleServer[] {
+  const map = object(value);
+  if (!map) {
+    return [];
+  }
+  const servers: BundleServer[] = [];
+  for (const [name, config] of Object.entries(object(map.mcpServers) ?? map)) {
+    const normalized = object(config);
+    if (normalized) {
+      servers.push({ name, config: normalized, baseDir: "" });
+    }
+  }
+  return servers;
+}
+
+function commandHook(entry: JsonObject): BundleHook | undefined {
+  if (entry.type !== "command" || typeof entry.command !== "string" || !entry.command.trim()) {
+    return undefined;
+  }
+  const timeout = typeof entry.timeout === "number" ? entry.timeout : 60;
+  return { event: "", command: entry.command, timeoutMs: Math.max(1000, timeout * 1000) };
+}
+
+function collectHooks(events: JsonObject, hooks: BundleHook[], unsupported: string[]): void {
+  for (const [event, groups] of Object.entries(events)) {
+    if (!Array.isArray(groups)) {
+      continue;
+    }
+    for (const group of groups) {
+      const matcherGroup = object(group);
+      const handlers = Array.isArray(matcherGroup?.hooks) ? matcherGroup.hooks : [group];
+      for (const handler of handlers) {
+        const normalized = object(handler);
+        const hook = normalized && commandHook(normalized);
+        if (!hook) {
+          unsupported.push(`hook ${event} handler ${String(normalized?.type ?? "unknown")}`);
+          continue;
+        }
+        hook.event = event;
+        hook.matcher = typeof matcherGroup?.matcher === "string" ? matcherGroup.matcher : undefined;
+        hooks.push(hook);
+        if (!SUPPORTED_HOOK_EVENTS.has(event)) {
+          unsupported.push(`hook ${event}`);
+        }
+      }
+    }
+  }
+}
+
+async function readHooks(
+  root: string,
+  paths: string[],
+  inline?: JsonObject,
+): Promise<{ hooks: BundleHook[]; unsupported: string[] }> {
+  const hooks: BundleHook[] = [];
+  const unsupported: string[] = [];
+  if (inline) {
+    collectHooks(object(inline.hooks) ?? inline, hooks, unsupported);
+  }
+  const seen = new Set<string>();
+  for (const candidate of paths) {
+    for (const file of await hookFiles(root, candidate)) {
+      if (seen.has(file)) {
+        continue;
+      }
+      seen.add(file);
+      const raw = await readJson(file);
+      const events = object(raw?.hooks) ?? raw;
+      if (events) {
+        collectHooks(events, hooks, unsupported);
+      }
+    }
+  }
+  return { hooks, unsupported };
+}
+
+async function hookFiles(root: string, candidate: string): Promise<string[]> {
+  const target = underRoot(root, candidate);
+  let stats;
+  try {
+    stats = await fs.lstat(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Plugin hook path uses a symlink: ${candidate}`);
+  }
+  if (!stats.isDirectory()) {
+    return [target];
+  }
+  const files: string[] = [];
+  async function walk(directory: string): Promise<void> {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const child = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new Error(`Plugin hook path uses a symlink: ${path.relative(root, child)}`);
+      }
+      if (entry.isDirectory()) {
+        await walk(child);
+      } else if (entry.isFile() && entry.name.endsWith(".json")) {
+        files.push(child);
+      }
+    }
+  }
+  await walk(target);
+  return files.sort();
+}
+
+export async function validateBundlePluginDirectory(
+  app: BundlePlugin["app"],
+  root: string,
+): Promise<void> {
+  try {
+    await fs.access(manifestPath(app, root));
+  } catch {
+    throw new Error(`Repository is not a supported ${app} plugin; missing plugin manifest.`);
+  }
+}
+
+export async function inspectBundlePlugin(
+  app: BundlePlugin["app"],
+  root: string,
+): Promise<BundlePlugin> {
+  const manifest = await readJson(manifestPath(app, root));
+  if (!manifest) {
+    throw new Error(`Missing ${app} plugin manifest.`);
+  }
+  const skillCandidates = app === "claude-code"
+    ? [
+        ...relativePaths(manifest.skills, ["skills"]),
+        ...relativePaths(manifest.commands, ["commands"]),
+        ...relativePaths(manifest.agents, ["agents"]),
+        ...relativePaths(manifest.outputStyles, ["output-styles"]),
+      ]
+    : relativePaths(manifest.skills, ["skills"]);
+  const inlineMcp = inlineServers(manifest.mcpServers);
+  for (const server of inlineMcp) {
+    server.baseDir = root;
+  }
+  const declaredMcpFiles = strings(manifest.mcpServers);
+  const mcpFiles = app === "codex" && declaredMcpFiles.length > 0
+    ? declaredMcpFiles
+    : [...new Set([".mcp.json", ...declaredMcpFiles])];
+  const inlineHooks = object(manifest.hooks);
+  const declaredHookPaths = strings(manifest.hooks);
+  const hookPaths = app === "codex"
+    ? declaredHookPaths.length > 0 || inlineHooks ? declaredHookPaths : ["hooks/hooks.json"]
+    : [...new Set(["hooks/hooks.json", ...declaredHookPaths])];
+  const hookResult = await readHooks(root, hookPaths, inlineHooks);
+  const unsupported = [...hookResult.unsupported];
+  const unsupportedFields = app === "claude-code"
+    ? ["lspServers", "monitors", "settings"]
+    : ["interface"];
+  for (const field of unsupportedFields) {
+    if (manifest[field] !== undefined) {
+      unsupported.push(field);
+    }
+  }
+  if (app === "codex" && (await readJson(path.join(root, ".app.json")))) {
+    unsupported.push("app connector metadata");
+  }
+  const servers = [...new Map(
+    [...await readServers(root, mcpFiles), ...inlineMcp].map((server) => [server.name, server]),
+  ).values()];
+  const supportedServers = servers.filter((server) => {
+    if (server.config.oauth || server.config.auth) {
+      unsupported.push(`MCP authentication for ${server.name}`);
+      return false;
+    }
+    return true;
+  });
+  return {
+    app,
+    key: path.basename(root),
+    name: typeof manifest.name === "string" && manifest.name.trim() ? manifest.name : path.basename(root),
+    version: typeof manifest.version === "string" ? manifest.version : "",
+    description: typeof manifest.description === "string" ? manifest.description : "",
+    path: root,
+    skillDirs: await existingPaths(root, [...new Set(skillCandidates)]),
+    servers: supportedServers,
+    hooks: hookResult.hooks,
+    unsupported,
+  };
+}
+
+export function summarizeBundlePlugin(plugin: BundlePlugin) {
+  return {
+    app: plugin.app,
+    key: plugin.key,
+    name: plugin.name,
+    version: plugin.version,
+    description: plugin.description,
+    skills: plugin.skillDirs.length,
+    servers: plugin.servers.map((server) => ({
+      name: server.name,
+      transport: typeof server.config.url === "string" ? (server.config.type ?? "http") : "stdio",
+    })),
+    hooks: plugin.hooks.map((hook) => ({ event: hook.event, matcher: hook.matcher })),
+    unsupported: plugin.unsupported,
+  };
+}
+
+export async function listBundlePlugins(
+  config: BabelfishConfig,
+  app?: BundlePlugin["app"],
+): Promise<BundlePlugin[]> {
+  const apps: BundlePlugin["app"][] = app ? [app] : ["claude-code", "codex"];
+  const plugins: BundlePlugin[] = [];
+  for (const current of apps) {
+    const installDir = appInstallDir(config, current);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(installDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    for (const entry of entries.sort()) {
+      if (entry.startsWith(".")) {
+        continue;
+      }
+      const root = path.join(installDir, entry);
+      plugins.push(await inspectBundlePlugin(current, root));
+    }
+  }
+  return plugins;
+}
+
+function expandRoot(value: string, pluginRoot: string): string {
+  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => {
+    if (name === "CLAUDE_PLUGIN_ROOT" || name === "PLUGIN_ROOT") {
+      return pluginRoot;
+    }
+    const resolved = process.env[name];
+    if (resolved === undefined) {
+      throw new Error(`Missing environment variable ${name} required by imported MCP server.`);
+    }
+    return resolved;
+  });
+}
+
+function serverEnv(config: JsonObject, pluginRoot: string): Record<string, string> {
+  const env = object(config.env) ?? {};
+  const merged: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === "string") {
+      merged[key] = expandRoot(value, pluginRoot);
+    }
+  }
+  for (const key of strings(config.env_vars ?? config.envVars)) {
+    if (process.env[key] !== undefined) {
+      merged[key] = process.env[key] as string;
+    }
+  }
+  return merged;
+}
+
+function httpHeaders(config: JsonObject, pluginRoot: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(
+    object(config.headers) ?? object(config.http_headers ?? config.httpHeaders) ?? {},
+  )) {
+    if (typeof value === "string") {
+      headers[key] = expandRoot(value, pluginRoot);
+    }
+  }
+  for (const [key, envName] of Object.entries(object(config.env_http_headers ?? config.envHttpHeaders) ?? {})) {
+    if (typeof envName === "string" && process.env[envName]) {
+      headers[key] = process.env[envName] as string;
+    }
+  }
+  const bearer = config.bearer_token_env_var ?? config.bearerTokenEnvVar;
+  if (typeof bearer === "string" && process.env[bearer]) {
+    headers.Authorization = `Bearer ${process.env[bearer]}`;
+  }
+  return headers;
+}
+
+async function withTimeout<T>(run: Promise<T>, timeoutMs: number, onTimeout: () => void): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      run,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          onTimeout();
+          reject(new Error(`MCP operation timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function clientFor(plugin: BundlePlugin, server: BundleServer, timeoutMs: number): Promise<Client> {
+  const client = new Client({ name: "babelfish", version: "0.1.0" });
+  const raw = server.config;
+  const url = typeof raw.url === "string" ? expandRoot(raw.url, plugin.path) : undefined;
+  if (url) {
+    const headers = httpHeaders(raw, plugin.path);
+    const requestInit = { headers };
+    const eventSourceInit = {
+      fetch: (input: string | URL | Request, init?: RequestInit) => fetch(input, {
+        ...init,
+        headers: { ...Object.fromEntries(new Headers(init?.headers)), ...headers },
+      }),
+    };
+    const transport = raw.type === "sse"
+      ? new SSEClientTransport(new URL(url), { eventSourceInit, requestInit })
+      : new StreamableHTTPClientTransport(new URL(url), { requestInit });
+    await withTimeout(client.connect(transport), timeoutMs, () => void client.close());
+    return client;
+  }
+  if (typeof raw.command !== "string") {
+    throw new Error(`MCP server ${server.name} has no command or URL.`);
+  }
+  const resolveProcessPath = (value: string) => {
+    const expanded = expandRoot(value, plugin.path);
+    return path.isAbsolute(expanded) || expanded.startsWith("./") || expanded.startsWith("../")
+      ? path.resolve(server.baseDir, expanded)
+      : expanded;
+  };
+  const resolveArgument = (value: string) => {
+    const usesPluginRoot = value.includes("${PLUGIN_ROOT}") || value.includes("${CLAUDE_PLUGIN_ROOT}");
+    return usesPluginRoot || value.startsWith("./") || value.startsWith("../")
+      ? resolveProcessPath(value)
+      : value;
+  };
+  const transport = new StdioClientTransport({
+    command: resolveProcessPath(raw.command),
+    args: strings(raw.args).map(resolveArgument),
+    cwd: typeof (raw.cwd ?? raw.workingDirectory) === "string"
+      ? underRoot(
+          plugin.path,
+          path.resolve(server.baseDir, expandRoot((raw.cwd ?? raw.workingDirectory) as string, plugin.path)),
+        )
+      : server.baseDir,
+    env: {
+      ...process.env,
+      ...serverEnv(raw, plugin.path),
+      CLAUDE_PLUGIN_ROOT: plugin.path,
+      PLUGIN_ROOT: plugin.path,
+    } as Record<string, string>,
+    stderr: "inherit",
+  });
+  await withTimeout(client.connect(transport), timeoutMs, () => void client.close());
+  return client;
+}
+
+export async function listBundleServerTools(
+  plugin: BundlePlugin,
+  server: BundleServer,
+  timeoutMs: number,
+) {
+  const client = await clientFor(plugin, server, timeoutMs);
+  try {
+    const tools = [];
+    let cursor: string | undefined;
+    do {
+      const page = await client.listTools(cursor ? { cursor } : undefined, { timeout: timeoutMs });
+      tools.push(...page.tools);
+      cursor = typeof page.nextCursor === "string" ? page.nextCursor : undefined;
+    } while (cursor);
+    return tools;
+  } finally {
+    await client.close();
+  }
+}
+
+export async function callBundleTool(
+  plugin: BundlePlugin,
+  server: BundleServer,
+  tool: string,
+  args: JsonObject,
+  signal?: AbortSignal,
+  timeoutMs = 120_000,
+) {
+  const client = await clientFor(plugin, server, timeoutMs);
+  try {
+    return await client.callTool({ name: tool, arguments: args }, undefined, { signal, timeout: timeoutMs });
+  } finally {
+    await client.close();
+  }
+}
+
+function matcherMatches(matcher: string | undefined, value: string): boolean {
+  if (!matcher || matcher === "*") {
+    return true;
+  }
+  try {
+    return new RegExp(matcher).test(value);
+  } catch {
+    return matcher === value;
+  }
+}
+
+export async function invokeBundleHooks(
+  config: BabelfishConfig,
+  event: string,
+  payload: JsonObject,
+  matchValue = "",
+): Promise<JsonObject[]> {
+  const results: JsonObject[] = [];
+  let currentPayload = payload;
+  for (const plugin of await listBundlePlugins(config)) {
+    for (const hook of plugin.hooks) {
+      if (hook.event !== event || !matcherMatches(hook.matcher, matchValue)) {
+        continue;
+      }
+      const command = expandRoot(hook.command, plugin.path);
+      let output: Awaited<ReturnType<typeof runHookCommand>>;
+      try {
+        output = await runHookCommand(command, plugin.path, currentPayload, hook.timeoutMs);
+      } catch (error) {
+        console.warn(`Babelfish hook ${plugin.key}/${event} failed: ${(error as Error).message}`);
+        continue;
+      }
+      if (output.blocked) {
+        results.push({
+          decision: "block",
+          reason: output.blockReason || `Blocked by ${plugin.key} ${event} hook`,
+        });
+        continue;
+      }
+      const trimmed = output.stdout.trim();
+      if (trimmed) {
+        try {
+          const parsed = object(JSON.parse(trimmed));
+          if (parsed) {
+            results.push(parsed);
+            const updatedInput = event === "PreToolUse" ? hookUpdatedInput(parsed) : undefined;
+            if (updatedInput) {
+              currentPayload = { ...currentPayload, tool_input: updatedInput };
+            }
+          }
+        } catch {
+          const lastLine = trimmed.split("\n").at(-1);
+          try {
+            const parsed = lastLine ? object(JSON.parse(lastLine)) : undefined;
+            if (parsed) {
+              results.push(parsed);
+              const updatedInput = event === "PreToolUse" ? hookUpdatedInput(parsed) : undefined;
+              if (updatedInput) {
+                currentPayload = { ...currentPayload, tool_input: updatedInput };
+              }
+            }
+          } catch {
+            // Successful hook output may be diagnostic text rather than a decision.
+          }
+        }
+      }
+    }
+  }
+  return results;
+}
+
+export function hookAdditionalContext(result: JsonObject): string | undefined {
+  const specific = object(result.hookSpecificOutput);
+  const value = specific?.additionalContext ?? result.systemMessage;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+export function hookBlock(result: JsonObject): { block: boolean; reason?: string } {
+  const specific = object(result.hookSpecificOutput);
+  const permission = specific?.permissionDecision ?? object(specific?.decision)?.behavior;
+  const blocked = result.continue === false || result.decision === "block" || permission === "deny";
+  const reason = specific?.permissionDecisionReason ?? object(specific?.decision)?.message
+    ?? result.stopReason ?? result.reason;
+  return { block: blocked, reason: typeof reason === "string" ? reason : undefined };
+}
+
+export function hookUpdatedInput(result: JsonObject): JsonObject | undefined {
+  const specific = object(result.hookSpecificOutput);
+  return object(specific?.updatedInput) ?? object(specific?.updatedMCPToolInput);
+}
+
+function runHookCommand(
+  command: string,
+  cwd: string,
+  payload: JsonObject,
+  timeoutMs: number,
+): Promise<{ stdout: string; blocked?: boolean; blockReason?: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("/bin/sh", ["-lc", command], {
+      cwd,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: cwd, PLUGIN_ROOT: cwd },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let settled = false;
+    const finish = (
+      error?: Error,
+      result?: { stdout: string; blocked?: boolean; blockReason?: string },
+    ) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      error ? reject(error) : resolve(result ?? { stdout: "" });
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 250).unref();
+      finish(new Error(`Hook timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", (error) => finish(error));
+    child.on("close", (code) => {
+      if (code === 0) {
+        finish(undefined, { stdout: Buffer.concat(stdout).toString("utf8") });
+      } else if (code === 2) {
+        finish(undefined, {
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          blocked: true,
+          blockReason: Buffer.concat(stderr).toString("utf8").trim(),
+        });
+      } else {
+        finish(new Error(Buffer.concat(stderr).toString("utf8") || `Hook exited with ${code}`));
+      }
+    });
+    child.stdin.end(JSON.stringify(payload));
+  });
+}

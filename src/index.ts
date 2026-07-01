@@ -1,4 +1,10 @@
 import { resolveConfig } from "./config.js";
+import {
+  hookAdditionalContext,
+  hookBlock,
+  hookUpdatedInput,
+  invokeBundleHooks,
+} from "./bundle-plugins.js";
 import { runBabelfishCli } from "./cli.js";
 import {
   callHermesCliCommand,
@@ -78,6 +84,10 @@ const UNSUPPORTED_WARNING_MIDDLEWARE = new Set([
 ]);
 
 const config = resolveConfig(undefined);
+const sessionStartContext = new Map<string, string[]>();
+const sessionStartPending = new Map<string, Promise<void>>();
+const sessionStartSources = new Map<string, string>();
+const submittedPromptRuns = new Set<string>();
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -117,6 +127,13 @@ function context(ctx: unknown): HermesRuntimeContext {
   };
 }
 
+function sessionKey(event: unknown, ctx: unknown): string | undefined {
+  const rawEvent = record(event);
+  const rawContext = record(ctx);
+  const value = rawContext.sessionKey ?? rawContext.sessionId ?? rawEvent.sessionKey ?? rawEvent.sessionId;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 async function invokeHook(hook: string, event: unknown, ctx: unknown) {
   return invokeHermesHook(config, { hook, kwargs: hermesKwargs(event), context: context(ctx) });
 }
@@ -141,7 +158,32 @@ function text(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
 
+function bundlePayload(eventName: string, event: unknown, ctx: unknown): Record<string, unknown> {
+  const raw = record(event);
+  const runtime = context(ctx);
+  const transcriptPath = raw.transcript_path ?? raw.transcriptPath;
+  return {
+    ...hermesKwargs(raw),
+    hook_event_name: eventName,
+    cwd: runtime.workspace,
+    session_id: runtime.sessionId ?? runtime.sessionKey ?? "",
+    model: runtime.model ?? "",
+    permission_mode: "default",
+    transcript_path: typeof transcriptPath === "string" ? transcriptPath : null,
+    turn_id: typeof raw.turnId === "string" ? raw.turnId : "",
+  };
+}
+
+async function bundleHooks(eventName: string, event: unknown, ctx: unknown, match = "") {
+  return invokeBundleHooks(config, eventName, bundlePayload(eventName, event, ctx), match);
+}
+
 function registerWarnings(api: OpenClawApi): void {
+  for (const warning of readGeneratedNativeToolRegistry().unsupported) {
+    api.logger?.warn(
+      `Babelfish plugin ${warning.plugin} (${warning.app}) has unsupported surface ${warning.surface}`,
+    );
+  }
   void listHermesPlugins(config).then(
     (list) => {
       for (const plugin of list.plugins) {
@@ -177,17 +219,40 @@ function registerToolHooks(api: OpenClawApi): void {
       .find(
         (decision) => decision.action === "block" && typeof decision.message === "string" && decision.message.length > 0,
       );
-    if (block) {
+    const rawEvent = record(event);
+    const currentParams = rewrite?.args ?? record(rawEvent.params);
+    const imported = await bundleHooks(
+      "PreToolUse",
+      {
+        ...rawEvent,
+        tool_name: rawEvent.toolName,
+        tool_input: currentParams,
+        tool_use_id: rawEvent.toolCallId ?? "",
+      },
+      ctx,
+      typeof rawEvent.toolName === "string" ? rawEvent.toolName : "",
+    );
+    const importedDecisions = imported;
+    const importedBlock = importedDecisions.map(hookBlock).find((decision) => decision.block);
+    if (block || importedBlock) {
       return {
         block: true,
-        blockReason: block.message,
+        blockReason: block?.message ?? importedBlock?.reason ?? "Blocked by imported plugin hook",
       };
     }
-    return rewrite ? { params: rewrite.args } : undefined;
+    const importedRewrite = importedDecisions.map(hookUpdatedInput).filter(Boolean).at(-1);
+    return rewrite || importedRewrite ? { params: importedRewrite ?? rewrite?.args } : undefined;
   });
 
   api.on("after_tool_call", async (event, ctx) => {
     await invokeHook("post_tool_call", event, ctx);
+    const raw = record(event);
+    await bundleHooks(
+      typeof raw.error === "string" && raw.error ? "PostToolUseFailure" : "PostToolUse",
+      { ...raw, tool_name: raw.toolName, tool_input: raw.params ?? {}, tool_response: raw.result },
+      ctx,
+      typeof raw.toolName === "string" ? raw.toolName : "",
+    );
   });
 
   api.registerAgentToolResultMiddleware(
@@ -286,6 +351,26 @@ function registerRunHooks(api: OpenClawApi): void {
     const contextParts = hookResult.results
       .map((result) => typeof result === "string" ? result : record(result).context)
       .filter((value): value is string => typeof value === "string" && value.length > 0);
+    const rawEvent = record(event);
+    const key = sessionKey(event, ctx);
+    if (key) {
+      await sessionStartPending.get(key);
+      sessionStartPending.delete(key);
+    }
+    const rawContext = record(ctx);
+    const runId = rawContext.runId ?? rawContext.turnId ?? rawEvent.runId ?? rawEvent.turnId;
+    const promptRunKey = typeof runId === "string" && runId.length > 0 ? runId : undefined;
+    if (!promptRunKey || !submittedPromptRuns.has(promptRunKey)) {
+      const imported = await bundleHooks("UserPromptSubmit", event, ctx);
+      contextParts.push(...imported.map(hookAdditionalContext).filter((value): value is string => Boolean(value)));
+      if (promptRunKey) {
+        submittedPromptRuns.add(promptRunKey);
+      }
+    }
+    if (key) {
+      contextParts.unshift(...(sessionStartContext.get(key) ?? []));
+      sessionStartContext.delete(key);
+    }
     return contextParts.length > 0 ? { prependContext: contextParts.join("\n\n") } : undefined;
   });
 
@@ -304,6 +389,25 @@ function registerRunHooks(api: OpenClawApi): void {
   });
   api.on("agent_end", async (event, ctx) => {
     await invokeHook("on_session_end", event, ctx);
+    const runId = record(event).runId ?? record(ctx).runId;
+    if (typeof runId === "string") {
+      submittedPromptRuns.delete(runId);
+    }
+  });
+  api.on("before_agent_finalize", async (event, ctx) => {
+    const imported = await bundleHooks("Stop", event, ctx);
+    const block = imported.map(hookBlock).find((decision) => decision.block);
+    return block
+      ? { action: "revise", reason: block.reason, retry: { instruction: block.reason ?? "Continue." } }
+      : undefined;
+  });
+  api.on("before_compaction", async (event, ctx) => {
+    const trigger = record(event).trigger;
+    await bundleHooks("PreCompact", event, ctx, typeof trigger === "string" ? trigger : "");
+  });
+  api.on("after_compaction", async (event, ctx) => {
+    const trigger = record(event).trigger;
+    await bundleHooks("PostCompact", event, ctx, typeof trigger === "string" ? trigger : "");
   });
 }
 
@@ -328,7 +432,30 @@ export function registerBabelfishCli(api: OpenClawApi): void {
 
 function registerSessionHooks(api: OpenClawApi): void {
   api.on("session_start", async (event, ctx) => {
-    await invokeHook("on_session_start", event, ctx);
+    const key = sessionKey(event, ctx);
+    const pending = (async () => {
+      await invokeHook("on_session_start", event, ctx);
+      const rawEvent = record(event);
+      const sessionId = typeof rawEvent.sessionId === "string" ? rawEvent.sessionId : undefined;
+      const transitionSource = sessionId ? sessionStartSources.get(sessionId) : undefined;
+      const source = typeof rawEvent.source === "string"
+        ? rawEvent.source
+        : transitionSource ?? (rawEvent.resumedFrom ? "resume" : "startup");
+      if (sessionId) {
+        sessionStartSources.delete(sessionId);
+      }
+      const imported = await bundleHooks("SessionStart", event, ctx, source);
+      const additional = imported
+        .map(hookAdditionalContext)
+        .filter((value): value is string => Boolean(value));
+      if (key && additional.length > 0) {
+        sessionStartContext.set(key, additional);
+      }
+    })();
+    if (key) {
+      sessionStartPending.set(key, pending);
+    }
+    await pending;
   });
   api.on("session_end", async (event, ctx) => {
     const runtimeContext = context(ctx);
@@ -339,7 +466,26 @@ function registerSessionHooks(api: OpenClawApi): void {
         context: runtimeContext,
       });
     } finally {
-      releaseHermesBridge(config, runtimeContext);
+      try {
+        const rawEvent = record(event);
+        const reason = rawEvent.reason;
+        const nextSessionId = rawEvent.nextSessionId;
+        if (typeof nextSessionId === "string") {
+          if (reason === "compaction") {
+            sessionStartSources.set(nextSessionId, "compact");
+          } else if (reason === "reset" || reason === "new") {
+            sessionStartSources.set(nextSessionId, "clear");
+          }
+        }
+        await bundleHooks("SessionEnd", event, ctx, typeof reason === "string" ? reason : "");
+      } finally {
+        const key = sessionKey(event, ctx);
+        if (key) {
+          sessionStartContext.delete(key);
+          sessionStartPending.delete(key);
+        }
+        releaseHermesBridge(config, runtimeContext);
+      }
     }
   });
   api.on("before_reset", async (event, ctx) => {
@@ -370,9 +516,11 @@ function registerMessageHooks(api: OpenClawApi): void {
 function registerSubagentHooks(api: OpenClawApi): void {
   api.on("subagent_spawned", async (event, ctx) => {
     await invokeHook("subagent_start", event, ctx);
+    await bundleHooks("SubagentStart", event, ctx);
   });
   api.on("subagent_ended", async (event, ctx) => {
     await invokeHook("subagent_stop", event, ctx);
+    await bundleHooks("SubagentStop", event, ctx);
   });
 }
 
