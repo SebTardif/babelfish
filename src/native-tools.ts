@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SUPPORTED_APPS, type BabelfishConfig, type SupportedApp } from "./config.js";
 import {
+  callBundleMcp,
   callBundleTool,
   listBundlePlugins,
   listBundleServerTools,
@@ -79,6 +80,7 @@ export type NativeToolEntry = {
   description: string;
   inputSchema: JsonObject;
   server?: string;
+  mcpOperation?: "listResources" | "readResource" | "listPrompts" | "getPrompt";
 };
 
 export type GeneratedCommandEntry = {
@@ -545,6 +547,33 @@ async function buildBundleToolEntries(
           inputSchema: tool.inputSchema,
         });
       }
+      const prefix = `${sanitizeName(plugin.key)}__${sanitizeName(server.name)}`;
+      entries.push(
+        {
+          kind: "tool", app: plugin.app, name: `${prefix}__resources_list`, plugin: plugin.key,
+          server: server.name, originalName: "resources/list", mcpOperation: "listResources",
+          description: `List MCP resources from ${plugin.key}/${server.name}`,
+          inputSchema: { type: "object", additionalProperties: false, properties: { cursor: { type: "string" } } },
+        },
+        {
+          kind: "tool", app: plugin.app, name: `${prefix}__resource_read`, plugin: plugin.key,
+          server: server.name, originalName: "resources/read", mcpOperation: "readResource",
+          description: `Read an MCP resource from ${plugin.key}/${server.name}`,
+          inputSchema: { type: "object", additionalProperties: false, properties: { uri: { type: "string" } }, required: ["uri"] },
+        },
+        {
+          kind: "tool", app: plugin.app, name: `${prefix}__prompts_list`, plugin: plugin.key,
+          server: server.name, originalName: "prompts/list", mcpOperation: "listPrompts",
+          description: `List MCP prompts from ${plugin.key}/${server.name}`,
+          inputSchema: { type: "object", additionalProperties: false, properties: { cursor: { type: "string" } } },
+        },
+        {
+          kind: "tool", app: plugin.app, name: `${prefix}__prompt_get`, plugin: plugin.key,
+          server: server.name, originalName: "prompts/get", mcpOperation: "getPrompt",
+          description: `Get an MCP prompt from ${plugin.key}/${server.name}`,
+          inputSchema: { type: "object", additionalProperties: false, properties: { name: { type: "string" }, arguments: { type: "object", additionalProperties: { type: "string" } } }, required: ["name"] },
+        },
+      );
     }
   }
   const counts = new Map<string, number>();
@@ -708,13 +737,14 @@ function generatedTools(
         if (!plugin || !server) {
           throw new Error(`Imported MCP tool source is no longer installed: ${entry.name}`);
         }
+        if (entry.mcpOperation) {
+          const value = await callBundleMcp(
+            plugin, server, entry.mcpOperation, asObject(params) ?? {}, signal, config.timeoutMs,
+          );
+          return result(value);
+        }
         const toolResult = await callBundleTool(
-          plugin,
-          server,
-          entry.originalName,
-          asObject(params) ?? {},
-          signal,
-          config.timeoutMs,
+          plugin, server, entry.originalName, asObject(params) ?? {}, signal, config.timeoutMs,
         );
         const content = Array.isArray(toolResult.content)
           ? normalizeMcpContent(toolResult.content)

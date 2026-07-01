@@ -569,6 +569,31 @@ export async function callBundleTool(
   }
 }
 
+export async function callBundleMcp(
+  plugin: BundlePlugin,
+  server: BundleServer,
+  operation: "listResources" | "readResource" | "listPrompts" | "getPrompt",
+  params: JsonObject,
+  signal?: AbortSignal,
+  timeoutMs = 120_000,
+) {
+  const client = await clientFor(plugin, server, timeoutMs);
+  try {
+    if (operation === "listResources") {
+      return await client.listResources(params, { signal, timeout: timeoutMs });
+    }
+    if (operation === "readResource") {
+      return await client.readResource(params as { uri: string }, { signal, timeout: timeoutMs });
+    }
+    if (operation === "listPrompts") {
+      return await client.listPrompts(params, { signal, timeout: timeoutMs });
+    }
+    return await client.getPrompt(params as { name: string; arguments?: Record<string, string> }, { signal, timeout: timeoutMs });
+  } finally {
+    await client.close();
+  }
+}
+
 function matcherMatches(matcher: string | undefined, value: string): boolean {
   if (!matcher || matcher === "*") {
     return true;
