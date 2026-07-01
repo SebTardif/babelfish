@@ -5,6 +5,7 @@ describe("resolveConfig", () => {
     const config = resolveConfig(undefined);
     expect(config.python).toBe("python3");
     expect(config.installDir).toContain("babelfish/hermes");
+    expect(config.rootDir).toContain("babelfish");
     expect(config.timeoutMs).toBe(120000);
   });
 
@@ -19,5 +20,10 @@ describe("resolveConfig", () => {
 
   it("expands a leading home marker in installDir", () => {
     expect(resolveConfig({ installDir: "~/custom-hermes" }).installDir).not.toContain("~");
+  });
+
+  it("does not derive bundle storage from a Hermes-only override", () => {
+    const config = resolveConfig({ installDir: "/opt/hermes-plugins" });
+    expect(config.rootDir).not.toBe("/opt");
   });
 });

@@ -5,15 +5,16 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export type InstallHermesPluginParams = {
+export type InstallPluginParams = {
   installDir: string;
   source: string;
   name?: string;
   force?: boolean;
+  validate?: (target: string) => Promise<void>;
   afterChange?: () => Promise<void>;
 };
 
-export type UninstallHermesPluginParams = {
+export type UninstallPluginParams = {
   installDir: string;
   name: string;
   afterChange?: () => Promise<void>;
@@ -45,7 +46,7 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
-async function validatePluginDirectory(target: string): Promise<void> {
+export async function validateHermesPluginDirectory(target: string): Promise<void> {
   const required = ["plugin.yaml", "__init__.py"];
   const missing = [];
   for (const file of required) {
@@ -59,13 +60,14 @@ async function validatePluginDirectory(target: string): Promise<void> {
   }
 }
 
-export async function installHermesPlugin({
+export async function installPlugin({
   installDir,
   source,
   name,
   force = false,
+  validate,
   afterChange,
-}: InstallHermesPluginParams): Promise<{ name: string; path: string }> {
+}: InstallPluginParams): Promise<{ name: string; path: string }> {
   if (!source.trim()) {
     throw new Error("source required");
   }
@@ -90,7 +92,7 @@ export async function installHermesPlugin({
     await execFileAsync("git", ["clone", "--depth", "1", source, staged], {
       maxBuffer: 1024 * 1024,
     });
-    await validatePluginDirectory(staged);
+    await validate?.(staged);
     if (replacing) {
       await fs.rename(target, backup);
     }
@@ -127,11 +129,11 @@ export async function installHermesPlugin({
   return { name: pluginName, path: target };
 }
 
-export async function uninstallHermesPlugin({
+export async function uninstallPlugin({
   installDir,
   name,
   afterChange,
-}: UninstallHermesPluginParams): Promise<{ name: string; path: string }> {
+}: UninstallPluginParams): Promise<{ name: string; path: string }> {
   const pluginName = sanitizePluginName(name);
   const target = path.join(installDir, pluginName);
   if (!(await pathExists(target))) {
@@ -161,3 +163,10 @@ export async function uninstallHermesPlugin({
   }
   return { name: pluginName, path: target };
 }
+
+
+export function installHermesPlugin(params: InstallPluginParams) {
+  return installPlugin({ ...params, validate: validateHermesPluginDirectory });
+}
+
+export const uninstallHermesPlugin = uninstallPlugin;

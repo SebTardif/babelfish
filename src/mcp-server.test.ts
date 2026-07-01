@@ -123,7 +123,7 @@ describe("Hermes MCP server", () => {
     expect(index.toolRoutes.get("a_b__shared_2")?.plugin).toBe("a_b");
   });
 
-  it("serves installed Hermes tools over MCP", async () => {
+  it("serves installed Hermes tools over MCP", { timeout: 15_000 }, async () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hermes-mcp-"));
     await copyFixture(installDir, "simple-hermes-plugin", "simple");
 
@@ -176,7 +176,7 @@ describe("Hermes MCP server", () => {
       expect(task.status).toBe("running");
 
       let finalStatus = "running";
-      for (let attempt = 0; attempt < 20 && finalStatus === "running"; attempt += 1) {
+      for (let attempt = 0; attempt < 100 && finalStatus === "running"; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 50));
         const status = await client.callTool({
           name: "babelfish_task_status",

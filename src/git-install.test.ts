@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import {
   installHermesPlugin,
+  installPlugin,
   sanitizePluginName,
   uninstallHermesPlugin,
 } from "./git-install.js";
@@ -22,6 +23,22 @@ describe("sanitizePluginName", () => {
 });
 
 describe("installHermesPlugin", () => {
+  it("installs a bundle validated by its caller", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-install-"));
+    const installDir = path.join(root, "installed");
+    const source = path.join(root, "source");
+    await fs.mkdir(path.join(source, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(path.join(source, ".codex-plugin", "plugin.json"), "{}");
+    await execFileAsync("git", ["-C", source, "init", "-q"]);
+    await execFileAsync("git", ["-C", source, "add", "."]);
+    await execFileAsync("git", ["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"]);
+    await expect(installPlugin({
+      installDir,
+      source,
+      validate: async (target) => fs.access(path.join(target, ".codex-plugin", "plugin.json")),
+    })).resolves.toMatchObject({ name: "source" });
+  });
+
   it("keeps an existing plugin when a forced clone fails", async () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-install-"));
     const target = path.join(installDir, "existing");

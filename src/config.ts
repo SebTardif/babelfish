@@ -1,12 +1,18 @@
 import os from "node:os";
 import path from "node:path";
 
-export type HermesBridgeConfig = {
+export const SUPPORTED_APPS = ["hermes", "claude-code", "codex"] as const;
+export type SupportedApp = (typeof SUPPORTED_APPS)[number];
+
+export type BabelfishConfig = {
   installDir: string;
+  rootDir: string;
   python: string;
   timeoutMs: number;
   env: Record<string, string>;
 };
+
+export type HermesBridgeConfig = BabelfishConfig;
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -39,7 +45,15 @@ export function defaultInstallDir(): string {
   return path.join(os.homedir(), ".openclaw", "babelfish", "hermes");
 }
 
-export function resolveConfig(raw: Record<string, unknown> | undefined): HermesBridgeConfig {
+function defaultRootDir(): string {
+  return path.join(os.homedir(), ".openclaw", "babelfish");
+}
+
+export function appInstallDir(config: BabelfishConfig, app: SupportedApp): string {
+  return app === "hermes" ? config.installDir : path.join(config.rootDir ?? path.dirname(config.installDir), app);
+}
+
+export function resolveConfig(raw: Record<string, unknown> | undefined): BabelfishConfig {
   const timeout =
     typeof raw?.timeoutMs === "number"
       ? Math.trunc(raw.timeoutMs)
@@ -50,6 +64,7 @@ export function resolveConfig(raw: Record<string, unknown> | undefined): HermesB
     defaultInstallDir();
   return {
     installDir: expandHome(installDir),
+    rootDir: expandHome(readString(raw?.rootDir) ?? process.env.OPENCLAW_BABELFISH_ROOT ?? defaultRootDir()),
     python: readString(raw?.python) ?? process.env.OPENCLAW_BABELFISH_HERMES_PYTHON ?? "python3",
     timeoutMs: Math.max(1000, timeout),
     env: readEnv(raw?.env),
