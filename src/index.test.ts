@@ -29,6 +29,14 @@ describe("native OpenClaw hook entry", () => {
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
         JSON.stringify({ hooks: { hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "node hook.mjs" }] }] } } }),
       );
+      const monitorRoot = path.join(bundleRoot, "claude-code", "monitor-plugin");
+      await fs.mkdir(path.join(monitorRoot, ".claude-plugin"), { recursive: true });
+      await fs.mkdir(path.join(monitorRoot, "monitors"));
+      await fs.writeFile(path.join(monitorRoot, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "monitor-plugin" }));
+      await fs.writeFile(
+        path.join(monitorRoot, "monitors", "monitors.json"),
+        JSON.stringify([{ name: "status", description: "Status", command: "printf 'ready\\n'; sleep 30" }]),
+      );
       vi.resetModules();
       const module = await import("./index.js");
       const entry = module.default;
@@ -67,6 +75,13 @@ describe("native OpenClaw hook entry", () => {
       await expect(
         hooks.get("agent_turn_prepare")?.({}, { sessionId: "styled-session" }),
       ).resolves.toEqual({ prependContext: "fixture context\n\nAnswer briefly." });
+
+      await hooks.get("session_start")?.({ sessionId: "monitor-session" }, { sessionId: "monitor-session" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await expect(
+        hooks.get("agent_turn_prepare")?.({}, { sessionId: "monitor-session" }),
+      ).resolves.toEqual({ prependContext: "fixture context\n\nStatus: ready" });
+      await hooks.get("session_end")?.({ sessionId: "monitor-session" }, { sessionId: "monitor-session" });
 
       await expect(
         hooks.get("before_agent_run")?.({ prompt: "deny" }, { runId: "run-blocked" }),

@@ -119,6 +119,21 @@ describe("bundle plugins", () => {
     }]);
   });
 
+  it("discovers always-on Claude monitors and reports deferred triggers", async () => {
+    const root = await fixture("claude-code");
+    await fs.mkdir(path.join(root, "monitors"));
+    await fs.writeFile(
+      path.join(root, "monitors", "monitors.json"),
+      JSON.stringify([
+        { name: "status", command: "printf ready", description: "Status" },
+        { name: "debug", command: "printf debug", description: "Debug", when: "on-skill-invoke:debug" },
+      ]),
+    );
+    const plugin = await inspectBundlePlugin("claude-code", root);
+    expect(plugin.monitors).toEqual([{ name: "status", command: "printf ready", description: "Status" }]);
+    expect(plugin.unsupported).toContain("monitor debug trigger on-skill-invoke:debug");
+  });
+
   it("loads declared hook directories and gives inline MCP servers precedence", async () => {
     const root = await fixture("codex");
     await fs.mkdir(path.join(root, "custom-hooks", "nested"), { recursive: true });

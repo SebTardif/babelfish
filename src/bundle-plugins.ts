@@ -44,6 +44,12 @@ export type BundleOutputStyle = {
   keepCodingInstructions: boolean;
 };
 
+export type BundleMonitor = {
+  name: string;
+  command: string;
+  description: string;
+};
+
 export type BundlePlugin = {
   app: Exclude<SupportedApp, "hermes">;
   key: string;
@@ -55,6 +61,7 @@ export type BundlePlugin = {
   servers: BundleServer[];
   hooks: BundleHook[];
   outputStyles: BundleOutputStyle[];
+  monitors: BundleMonitor[];
   unsupported: string[];
 };
 
@@ -76,6 +83,17 @@ function strings(value: unknown): string[] {
 async function readJson(target: string): Promise<JsonObject | undefined> {
   try {
     return object(JSON.parse(await fs.readFile(target, "utf8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw new Error(`Could not parse ${target}: ${(error as Error).message}`);
+  }
+}
+
+async function readJsonValue(target: string): Promise<unknown> {
+  try {
+    return JSON.parse(await fs.readFile(target, "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
@@ -116,6 +134,36 @@ async function readOutputStyles(root: string, candidates: string[]): Promise<Bun
     }
   }
   return styles;
+}
+
+async function readMonitors(root: string, manifest: JsonObject): Promise<{ monitors: BundleMonitor[]; unsupported: string[] }> {
+  const experimental = object(manifest.experimental);
+  const declared = experimental?.monitors;
+  let entries: unknown[] = Array.isArray(declared) ? declared : [];
+  if (typeof declared === "string" || declared === undefined) {
+    const file = typeof declared === "string" ? declared : "monitors/monitors.json";
+    const raw = await readJsonValue(underRoot(root, file));
+    entries = Array.isArray(raw) ? raw : Array.isArray(object(raw)?.monitors) ? object(raw)?.monitors as unknown[] : [];
+  }
+  const monitors: BundleMonitor[] = [];
+  const unsupported: string[] = [];
+  for (const value of entries) {
+    const entry = object(value);
+    if (!entry || typeof entry.name !== "string" || typeof entry.command !== "string") {
+      unsupported.push("invalid monitor");
+      continue;
+    }
+    if (typeof entry.when === "string" && entry.when !== "always") {
+      unsupported.push(`monitor ${entry.name} trigger ${entry.when}`);
+      continue;
+    }
+    monitors.push({
+      name: entry.name,
+      command: entry.command.replaceAll("${CLAUDE_PLUGIN_ROOT}", root).replaceAll("${PLUGIN_ROOT}", root),
+      description: typeof entry.description === "string" ? entry.description : entry.name,
+    });
+  }
+  return { monitors, unsupported };
 }
 
 function underRoot(root: string, value: string): string {
@@ -326,9 +374,12 @@ export async function inspectBundlePlugin(
     ? declaredHookPaths.length > 0 || inlineHooks ? declaredHookPaths : ["hooks/hooks.json"]
     : [...new Set(["hooks/hooks.json", ...declaredHookPaths])];
   const hookResult = await readHooks(root, hookPaths, inlineHooks);
-  const unsupported = [...hookResult.unsupported];
+  const monitorResult = app === "claude-code"
+    ? await readMonitors(root, manifest)
+    : { monitors: [], unsupported: [] };
+  const unsupported = [...hookResult.unsupported, ...monitorResult.unsupported];
   const unsupportedFields = app === "claude-code"
-    ? ["lspServers", "monitors", "settings"]
+    ? ["lspServers", "settings"]
     : ["interface"];
   for (const field of unsupportedFields) {
     if (manifest[field] !== undefined) {
@@ -359,6 +410,7 @@ export async function inspectBundlePlugin(
     servers: supportedServers,
     hooks: hookResult.hooks,
     outputStyles: await readOutputStyles(root, outputStyleCandidates),
+    monitors: monitorResult.monitors,
     unsupported,
   };
 }
@@ -377,6 +429,7 @@ export function summarizeBundlePlugin(plugin: BundlePlugin) {
     })),
     hooks: plugin.hooks.map((hook) => ({ event: hook.event, matcher: hook.matcher })),
     outputStyles: plugin.outputStyles.map((style) => style.name),
+    monitors: plugin.monitors.map((monitor) => monitor.name),
     unsupported: plugin.unsupported,
   };
 }

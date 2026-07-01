@@ -1,9 +1,12 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import readline from "node:readline";
 import { resolveConfig } from "./config.js";
 import {
   hookAdditionalContext,
   hookBlock,
   hookUpdatedInput,
   invokeBundleHooks,
+  listBundlePlugins,
 } from "./bundle-plugins.js";
 import { runBabelfishCli } from "./cli.js";
 import {
@@ -90,6 +93,8 @@ const sessionStartPending = new Map<string, Promise<void>>();
 const sessionStartSources = new Map<string, string>();
 const promptContextByRun = new Map<string, string[]>();
 const outputStyleBySession = new Map<string, GeneratedOutputStyleEntry>();
+const monitorProcesses = new Map<string, ChildProcess[]>();
+const monitorContext = new Map<string, string[]>();
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -141,6 +146,48 @@ function runKey(event: unknown, ctx: unknown): string | undefined {
   const rawContext = record(ctx);
   const value = rawContext.runId ?? rawContext.turnId ?? rawEvent.runId ?? rawEvent.turnId;
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function stopMonitors(key: string): void {
+  for (const child of monitorProcesses.get(key) ?? []) {
+    if (child.pid) {
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {
+        child.kill("SIGTERM");
+      }
+    }
+  }
+  monitorProcesses.delete(key);
+  monitorContext.delete(key);
+}
+
+async function startMonitors(key: string, workspace: string): Promise<void> {
+  stopMonitors(key);
+  const children: ChildProcess[] = [];
+  for (const plugin of await listBundlePlugins(config, "claude-code")) {
+    for (const monitor of plugin.monitors) {
+      const command = monitor.command.replaceAll("${CLAUDE_PROJECT_DIR}", workspace);
+      const child = spawn("/bin/sh", ["-lc", command], {
+        cwd: workspace,
+        detached: true,
+        env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin.path, PLUGIN_ROOT: plugin.path },
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      children.push(child);
+      const lines = readline.createInterface({ input: child.stdout! });
+      lines.on("line", (line) => {
+        const text = line.trim();
+        if (!text) return;
+        const pending = monitorContext.get(key) ?? [];
+        pending.push(`${monitor.description}: ${text}`);
+        monitorContext.set(key, pending.slice(-50));
+      });
+    }
+  }
+  if (children.length > 0) {
+    monitorProcesses.set(key, children);
+  }
 }
 
 async function invokeHook(hook: string, event: unknown, ctx: unknown) {
@@ -417,6 +464,8 @@ function registerRunHooks(api: OpenClawApi): void {
           ? style.instructions
           : `Use the following response style instead of the default coding-oriented response style:\n\n${style.instructions}`);
       }
+      contextParts.push(...(monitorContext.get(key) ?? []));
+      monitorContext.delete(key);
     }
     return contextParts.length > 0 ? { prependContext: contextParts.join("\n\n") } : undefined;
   });
@@ -498,6 +547,9 @@ function registerSessionHooks(api: OpenClawApi): void {
       if (key && additional.length > 0) {
         sessionStartContext.set(key, additional);
       }
+      if (key) {
+        await startMonitors(key, context(ctx).workspace ?? process.cwd());
+      }
     })();
     if (key) {
       sessionStartPending.set(key, pending);
@@ -531,6 +583,7 @@ function registerSessionHooks(api: OpenClawApi): void {
           sessionStartContext.delete(key);
           sessionStartPending.delete(key);
           outputStyleBySession.delete(key);
+          stopMonitors(key);
         }
         releaseHermesBridge(config, runtimeContext);
       }

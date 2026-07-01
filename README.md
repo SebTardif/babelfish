@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/babelfish-icon-v2.svg" alt="Babelfish mascot" width="220">
+</p>
+
 # Babelfish
 
 Babelfish lets OpenClaw install and use plugins made for other coding and agent
@@ -112,7 +116,7 @@ format does not provide that surface.
 | LLM/request/execution middleware | No | N/A | N/A | Detected and reported; no stable equivalent is used |
 | Codex app connectors | N/A | No | N/A | Connector IDs are not MCP servers and have no current equivalent |
 | LSP servers | N/A | N/A | No | Detected but not started |
-| Monitors | N/A | N/A | No | Detected but not started |
+| Monitors | N/A | N/A | Partial | Always-on monitors run for the session and queue bounded stdout context; skill-triggered monitors are listed only |
 | Output styles | N/A | N/A | Partial | Imported as user-only skills |
 | Plugin settings/default agent | N/A | N/A | No | No native Babelfish mapping yet |
 | Supporting scripts, binaries, and assets | Full | Full | Full | Retained when referenced by an imported skill, hook, or MCP server |
