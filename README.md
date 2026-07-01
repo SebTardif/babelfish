@@ -80,43 +80,43 @@ Names remain unchanged when unique. Collisions receive a plugin-qualified
 name. Install and uninstall regenerate `openclaw.plugin.json`,
 `babelfish.generated.json`, and the generated skill directories.
 
-## Support matrix
+## Plugin support
 
 **Full** means the source behavior has a direct native mapping. **Partial**
 means the useful behavior works with listed semantic gaps. **No** means the
 surface is detected or documented but not executed. **N/A** means the source
 format does not provide that surface.
 
-| Plugin surface | Claude Code | Codex | Hermes Agent |
-| --- | --- | --- | --- |
-| Manifest metadata | Full | Full | Full |
-| Native source-runtime tools | N/A | N/A | Full |
-| MCP tools | Full for stdio, HTTP, and SSE without interactive auth | Full for stdio, HTTP, and SSE without interactive auth | N/A |
-| MCP resources and prompts | No | No | N/A |
-| Skills and support files | Full | Full | Full |
-| User prompt commands | Partial: imported as user-only skills | N/A | Full: native slash commands |
-| Terminal CLI commands | N/A | N/A | Full |
-| Plugin-defined agents | Partial: imported as user-only skills; model and tool isolation are not preserved | N/A | N/A |
-| Pre-tool command hooks | Full: block and argument rewrite | Full: block and argument rewrite | Full |
-| Permission command hooks | No: OpenClaw has no equivalent approval-boundary event | No: OpenClaw has no equivalent approval-boundary event | N/A |
-| Post-tool command hooks | Full, including failure hooks | Full | Full |
-| Session start hooks | Full, including next-turn context injection | Full, including next-turn context injection | Full |
-| Session end hooks | Full | Full when declared | Full |
-| User-prompt hooks | Partial: additional context maps; prompt replacement and hard stop do not | Partial: additional context maps; prompt replacement and hard stop do not | Partial |
-| Stop/finalization hooks | Full for continue/block decisions | Full for continue/block decisions | Partial |
-| Pre/post compaction hooks | Full for observation | Full for observation | N/A |
-| Subagent lifecycle hooks | Full | Full | Full |
-| Prompt or agent hook handlers | No | No | N/A |
-| Notification hooks | No | N/A | N/A |
-| Tool-result middleware | N/A | N/A | Full |
-| LLM/request/execution middleware | N/A | N/A | No |
-| Codex app connectors | N/A | No | N/A |
-| LSP servers | No | N/A | N/A |
-| Monitors | No | N/A | N/A |
-| Output styles | Partial: imported as user-only skills | N/A | N/A |
-| Plugin settings/default agent | No | N/A | N/A |
-| Supporting scripts, binaries, and assets | Full when referenced by an imported skill, hook, or MCP server | Full when referenced by an imported skill, hook, or MCP server | Full |
-| Marketplace-native resolution | No; install the plugin Git repository directly | No; install the plugin Git repository directly | No; install the plugin Git repository directly |
+| Plugin surface | Hermes Agent | Codex | Claude Code | OpenClaw mapping or limitation |
+| --- | --- | --- | --- | --- |
+| Manifest metadata | Full | Full | Full | Used for discovery, names, versions, and descriptions |
+| Native source-runtime tools | Full | N/A | N/A | Generated as native OpenClaw tools with the source schema |
+| MCP tools | N/A | Full | Full | Generated as native tools; stdio, HTTP, and SSE work without interactive auth |
+| MCP resources and prompts | N/A | No | No | No native Babelfish mapping yet |
+| Skills and support files | Full | Full | Full | Copied into native OpenClaw plugin skills |
+| User prompt commands | Full | N/A | Partial | Hermes commands become native slash commands; Claude commands become user-only skills |
+| Terminal CLI commands | Full | N/A | N/A | Registered as top-level `openclaw <command>` commands |
+| Plugin-defined agents | N/A | N/A | Partial | Imported as user-only skills; model and tool isolation are not preserved |
+| Pre-tool command hooks | Full | Full | Full | Blocks and argument rewrites map to OpenClaw's pre-tool hook |
+| Permission command hooks | N/A | No | No | OpenClaw has no equivalent approval-boundary event |
+| Post-tool command hooks | Full | Full | Full | Claude Code failure hooks are also preserved |
+| Session start hooks | Full | Full | Full | Additional context is injected into the next agent turn |
+| Session end hooks | Full | Full | Full | Codex hooks must be declared by its supported manifest or conventional path |
+| User-prompt hooks | Partial | Partial | Partial | Additional context maps; prompt replacement and hard stop do not |
+| Stop/finalization hooks | Partial | Full | Full | Codex and Claude continue/block decisions map directly |
+| Pre/post compaction hooks | N/A | Full | Full | Observation hooks run around OpenClaw compaction |
+| Subagent lifecycle hooks | Full | Full | Full | Mapped to OpenClaw subagent start/end hooks |
+| Prompt or agent hook handlers | N/A | No | No | Only command hook handlers execute |
+| Notification hooks | N/A | N/A | No | Detected but not executed |
+| Tool-result middleware | Full | N/A | N/A | Maps to OpenClaw tool-result middleware |
+| LLM/request/execution middleware | No | N/A | N/A | Detected and reported; no stable equivalent is used |
+| Codex app connectors | N/A | No | N/A | Connector IDs are not MCP servers and have no current equivalent |
+| LSP servers | N/A | N/A | No | Detected but not started |
+| Monitors | N/A | N/A | No | Detected but not started |
+| Output styles | N/A | N/A | Partial | Imported as user-only skills |
+| Plugin settings/default agent | N/A | N/A | No | No native Babelfish mapping yet |
+| Supporting scripts, binaries, and assets | Full | Full | Full | Retained when referenced by an imported skill, hook, or MCP server |
+| Marketplace-native resolution | No | No | No | Install the plugin Git repository directly |
 
 ## App notes
 
