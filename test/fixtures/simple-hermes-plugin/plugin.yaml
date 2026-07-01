@@ -1,0 +1,7 @@
+name: simple
+version: 1.0.0
+description: "Simple Hermes fixture plugin"
+provides_tools:
+  - simple_echo
+hooks:
+  - post_tool_call

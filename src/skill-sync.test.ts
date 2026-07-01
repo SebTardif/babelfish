@@ -1,0 +1,55 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { syncHermesSkills } from "./skill-sync.js";
+
+async function copyFixture(target: string): Promise<void> {
+  const fixture = path.join(process.cwd(), "test/fixtures/simple-hermes-plugin");
+  await fs.cp(fixture, path.join(target, "simple"), { recursive: true });
+}
+
+describe("syncHermesSkills", () => {
+  it("writes Hermes skills as OpenClaw SKILL.md files", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-skills-"));
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-package-"));
+    await copyFixture(installDir);
+
+    const written = await syncHermesSkills(
+      { installDir, python: "python3", timeoutMs: 10000, env: {} },
+      rootDir,
+    );
+
+    expect(written).toEqual(["babelfish-simple-simple_skill"]);
+    const markdown = await fs.readFile(
+      path.join(rootDir, "skills", "babelfish-generated", "babelfish-simple-simple_skill", "SKILL.md"),
+      "utf-8",
+    );
+    expect(markdown).toContain("name: babelfish-simple-simple_skill");
+    expect(markdown).toContain("Simple Skill");
+  });
+
+  it("removes stale generated skills", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-skills-"));
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-package-"));
+    const staleDir = path.join(rootDir, "skills", "babelfish-generated", "old");
+    await fs.mkdir(staleDir, { recursive: true });
+    await fs.writeFile(path.join(staleDir, "SKILL.md"), "old", "utf-8");
+    await copyFixture(installDir);
+
+    await syncHermesSkills({ installDir, python: "python3", timeoutMs: 10000, env: {} }, rootDir);
+
+    await expect(fs.stat(staleDir)).rejects.toThrow();
+  });
+
+  it("suffixes generated skill slug collisions", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-skills-"));
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-package-"));
+    const fixture = path.join(process.cwd(), "test/fixtures/simple-hermes-plugin");
+    await fs.cp(fixture, path.join(installDir, "a.b"), { recursive: true });
+    await fs.cp(fixture, path.join(installDir, "a-b"), { recursive: true });
+
+    await expect(
+      syncHermesSkills({ installDir, python: "python3", timeoutMs: 10000, env: {} }, rootDir),
+    ).resolves.toEqual(["babelfish-a-b-simple_skill", "babelfish-a-b-simple_skill-2"]);
+  });
+});

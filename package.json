@@ -1,0 +1,54 @@
+{
+  "name": "@openclaw/babelfish",
+  "version": "0.1.0",
+  "description": "Use plugins from supported coding and agent apps in OpenClaw",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/bin.js",
+  "bin": {
+    "babelfish": "./dist/bin.js"
+  },
+  "files": [
+    "openclaw.plugin.json",
+    "mcp/",
+    "skills/",
+    "dist/",
+    "python/",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/babelfish.git"
+  },
+  "bugs": {
+    "url": "https://github.com/openclaw/babelfish/issues"
+  },
+  "homepage": "https://github.com/openclaw/babelfish#readme",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "babelfish",
+    "agent-plugins",
+    "plugins"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"]
+  },
+  "scripts": {
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json && esbuild src/index.ts --bundle --platform=node --format=esm --packages=bundle --outfile=dist/index.js && esbuild src/bin.ts --bundle --platform=node --format=esm --packages=bundle --banner:js='#!/usr/bin/env node' --outfile=dist/bin.js",
+    "test": "vitest run",
+    "check": "npm run build && npm test",
+    "pack:local": "npm run build && npm pack"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.4"
+  }
+}

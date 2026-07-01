@@ -1,0 +1,22 @@
+{
+  "id": "babelfish",
+  "name": "Babelfish",
+  "description": "Use plugins from supported coding and agent apps in OpenClaw.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  },
+  "skills": [
+    "skills"
+  ],
+  "contracts": {
+    "tools": ["babelfish_plugins_list"],
+    "agentToolResultMiddleware": [
+      "openclaw",
+      "codex"
+    ]
+  }
+}

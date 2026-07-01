@@ -1,0 +1,133 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+async function copyFixture(target: string): Promise<void> {
+  const fixture = path.join(process.cwd(), "test/fixtures/simple-hermes-plugin");
+  await fs.cp(fixture, path.join(target, "simple"), { recursive: true });
+}
+
+describe("native OpenClaw hook entry", () => {
+  it("registers hooks and maps Hermes pre_tool_call blocks", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-native-"));
+    await copyFixture(installDir);
+    const previous = process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR;
+    const hookLog = path.join(installDir, "hook.log");
+    try {
+      process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR = installDir;
+      process.env.BABELFISH_TEST_HOOK_LOG = hookLog;
+      vi.resetModules();
+      const module = await import("./index.js");
+      const entry = module.default;
+      const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+      const api = {
+        logger: { warn: vi.fn() },
+        on: vi.fn((name: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+          hooks.set(name, handler);
+        }),
+        registerTool: vi.fn(),
+        registerCommand: vi.fn(),
+        registerCli: vi.fn(),
+        registerAgentToolResultMiddleware: vi.fn(),
+      };
+
+      entry.register(api);
+
+      expect(api.on).toHaveBeenCalledWith("before_tool_call", expect.any(Function));
+      await expect(
+        hooks.get("before_tool_call")?.({ toolName: "blocked" }, { sessionId: "session-1" }),
+      ).resolves.toEqual({ block: true, blockReason: "blocked" });
+      expect(api.registerAgentToolResultMiddleware).toHaveBeenCalledOnce();
+
+      await hooks.get("model_call_ended")?.({ outcome: "error" }, { sessionId: "session-1" });
+      await hooks.get("model_call_ended")?.({ outcome: "success" }, { sessionId: "session-1" });
+      await expect(fs.readFile(hookLog, "utf8")).resolves.toBe(
+        "api_request_error\npost_api_request\n",
+      );
+
+      const nativeApi = {
+        registerTool: vi.fn(),
+      };
+      module.registerNativeTools(nativeApi, [
+        {
+          kind: "tool",
+          name: "simple_echo",
+          plugin: "simple",
+          originalName: "simple_echo",
+          description: "Simple echo",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: { value: { type: "string" } },
+          },
+        },
+      ]);
+      expect(nativeApi.registerTool).toHaveBeenCalledWith(expect.any(Function), {
+        names: ["babelfish_plugins_list", "simple_echo"],
+      });
+      const factory = nativeApi.registerTool.mock.calls[0]?.[0];
+      const tools = factory({ sessionId: "session-1" });
+      await expect(tools.find((tool) => tool.name === "simple_echo")?.execute("call-1", {
+        value: "native-ok",
+      })).resolves.toMatchObject({ details: { echo: "native-ok" } });
+
+      const commandApi = { registerCommand: vi.fn() };
+      module.registerHermesCommands(commandApi, [
+        {
+          name: "simple",
+          plugin: "simple",
+          originalName: "simple",
+          description: "Simple command",
+          argsHint: "<raw text>",
+        },
+      ]);
+      const command = commandApi.registerCommand.mock.calls[0]?.[0];
+      await expect(command.handler({ args: "from-slash" })).resolves.toEqual({
+        text: '{\n  "command": "from-slash"\n}',
+      });
+
+      const cliAction = vi.fn();
+      const cliProgram = {
+        command: vi.fn(() => ({
+          description: vi.fn().mockReturnThis(),
+          argument: vi.fn().mockReturnThis(),
+          allowUnknownOption: vi.fn().mockReturnThis(),
+          action: cliAction,
+        })),
+      };
+      const cliApi = { registerCli: vi.fn((register: (ctx: unknown) => void) => register({ program: cliProgram })) };
+      module.registerBabelfishCli(cliApi);
+      expect(cliProgram.command).toHaveBeenCalledWith("babelfish");
+      cliProgram.command.mockClear();
+      cliAction.mockClear();
+      module.registerHermesCliCommands(cliApi, [
+        {
+          name: "simplecli",
+          plugin: "simple",
+          originalName: "simplecli",
+          description: "Simple CLI command",
+          argsHint: "",
+        },
+      ]);
+      expect(cliProgram.command).toHaveBeenCalledWith("simplecli");
+      expect(cliApi.registerCli).toHaveBeenCalledTimes(2);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        await expect(cliAction.mock.calls[0]?.[0](["from-cli"])).resolves.toBeUndefined();
+        expect(write).toHaveBeenCalledWith("printed:from-cli\n");
+        expect(log).toHaveBeenCalledWith('{\n  "cli": "from-cli"\n}');
+      } finally {
+        write.mockRestore();
+        log.mockRestore();
+      }
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR;
+      } else {
+        process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR = previous;
+      }
+      delete process.env.BABELFISH_TEST_HOOK_LOG;
+    }
+  });
+});

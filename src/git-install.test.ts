@@ -1,0 +1,130 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import {
+  installHermesPlugin,
+  sanitizePluginName,
+  uninstallHermesPlugin,
+} from "./git-install.js";
+
+const execFileAsync = promisify(execFile);
+
+describe("sanitizePluginName", () => {
+  it("accepts boring repo names", () => {
+    expect(sanitizePluginName("my-hermes_plugin.1")).toBe("my-hermes_plugin.1");
+  });
+
+  it("rejects traversal", () => {
+    expect(() => sanitizePluginName("../bad")).toThrow(/letters/);
+  });
+});
+
+describe("installHermesPlugin", () => {
+  it("keeps an existing plugin when a forced clone fails", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-install-"));
+    const target = path.join(installDir, "existing");
+    await fs.mkdir(target);
+    await fs.writeFile(path.join(target, "marker"), "kept");
+
+    await expect(
+      installHermesPlugin({
+        installDir,
+        source: path.join(installDir, "missing"),
+        name: "existing",
+        force: true,
+      }),
+    ).rejects.toThrow();
+
+    await expect(fs.readFile(path.join(target, "marker"), "utf8")).resolves.toBe("kept");
+  });
+
+  it("keeps an existing plugin when the replacement is not a supported plugin", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-install-"));
+    const installDir = path.join(root, "installed");
+    const source = path.join(root, "source");
+    const target = path.join(installDir, "existing");
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, "marker"), "kept");
+    await fs.mkdir(source);
+    await fs.mkdir(path.join(source, "plugin.yaml"));
+    await fs.mkdir(path.join(source, "__init__.py"));
+    await fs.writeFile(path.join(source, "plugin.yaml", "marker"), "directory");
+    await fs.writeFile(path.join(source, "__init__.py", "marker"), "directory");
+    await execFileAsync("git", ["-C", source, "init", "-q"]);
+    await execFileAsync("git", ["-C", source, "add", "."]);
+    await execFileAsync("git", [
+      "-C",
+      source,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-qm",
+      "fixture",
+    ]);
+
+    await expect(
+      installHermesPlugin({ installDir, source, name: "existing", force: true }),
+    ).rejects.toThrow("not a supported plugin");
+    await expect(fs.readFile(path.join(target, "marker"), "utf8")).resolves.toBe("kept");
+  });
+
+  it("restores the previous plugin when regeneration fails", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-install-"));
+    const installDir = path.join(root, "installed");
+    const source = path.join(root, "source");
+    const target = path.join(installDir, "existing");
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, "marker"), "kept");
+    await fs.mkdir(source);
+    await fs.writeFile(path.join(source, "plugin.yaml"), "name: replacement\n");
+    await fs.writeFile(path.join(source, "__init__.py"), "def register(ctx): pass\n");
+    await execFileAsync("git", ["-C", source, "init", "-q"]);
+    await execFileAsync("git", ["-C", source, "add", "."]);
+    await execFileAsync("git", [
+      "-C",
+      source,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-qm",
+      "fixture",
+    ]);
+
+    await expect(
+      installHermesPlugin({
+        installDir,
+        source,
+        name: "existing",
+        force: true,
+        afterChange: async () => {
+          throw new Error("regeneration failed");
+        },
+      }),
+    ).rejects.toThrow("regeneration failed");
+    await expect(fs.readFile(path.join(target, "marker"), "utf8")).resolves.toBe("kept");
+  });
+
+  it("restores an uninstalled plugin when regeneration fails", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-install-"));
+    const target = path.join(installDir, "existing");
+    await fs.mkdir(target);
+    await fs.writeFile(path.join(target, "marker"), "kept");
+
+    await expect(
+      uninstallHermesPlugin({
+        installDir,
+        name: "existing",
+        afterChange: async () => {
+          throw new Error("regeneration failed");
+        },
+      }),
+    ).rejects.toThrow("regeneration failed");
+    await expect(fs.readFile(path.join(target, "marker"), "utf8")).resolves.toBe("kept");
+  });
+});
