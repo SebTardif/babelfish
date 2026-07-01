@@ -33,7 +33,9 @@ export type BundleServer = {
 export type BundleHook = {
   event: string;
   matcher?: string;
-  command: string;
+  type: "command" | "prompt";
+  command?: string;
+  prompt?: string;
   timeoutMs: number;
 };
 
@@ -234,15 +236,28 @@ function inlineServers(value: unknown): BundleServer[] {
   return servers;
 }
 
-function commandHook(entry: JsonObject): BundleHook | undefined {
-  if (entry.type !== "command" || typeof entry.command !== "string" || !entry.command.trim()) {
-    return undefined;
-  }
+function commandHook(app: BundlePlugin["app"], entry: JsonObject): BundleHook | undefined {
   const timeout = typeof entry.timeout === "number" ? entry.timeout : 60;
-  return { event: "", command: entry.command, timeoutMs: Math.max(1000, timeout * 1000) };
+  if (entry.type === "command" && typeof entry.command === "string" && entry.command.trim()) {
+    return { event: "", type: "command", command: entry.command, timeoutMs: Math.max(1000, timeout * 1000) };
+  }
+  if (
+    app === "claude-code"
+    && entry.type === "prompt"
+    && typeof entry.prompt === "string"
+    && entry.prompt.trim()
+  ) {
+    return { event: "", type: "prompt", prompt: entry.prompt, timeoutMs: Math.max(1000, timeout * 1000) };
+  }
+  return undefined;
 }
 
-function collectHooks(events: JsonObject, hooks: BundleHook[], unsupported: string[]): void {
+function collectHooks(
+  app: BundlePlugin["app"],
+  events: JsonObject,
+  hooks: BundleHook[],
+  unsupported: string[],
+): void {
   for (const [event, groups] of Object.entries(events)) {
     if (!Array.isArray(groups)) {
       continue;
@@ -252,7 +267,7 @@ function collectHooks(events: JsonObject, hooks: BundleHook[], unsupported: stri
       const handlers = Array.isArray(matcherGroup?.hooks) ? matcherGroup.hooks : [group];
       for (const handler of handlers) {
         const normalized = object(handler);
-        const hook = normalized && commandHook(normalized);
+        const hook = normalized && commandHook(app, normalized);
         if (!hook) {
           unsupported.push(`hook ${event} handler ${String(normalized?.type ?? "unknown")}`);
           continue;
@@ -269,6 +284,7 @@ function collectHooks(events: JsonObject, hooks: BundleHook[], unsupported: stri
 }
 
 async function readHooks(
+  app: BundlePlugin["app"],
   root: string,
   paths: string[],
   inline?: JsonObject,
@@ -276,7 +292,7 @@ async function readHooks(
   const hooks: BundleHook[] = [];
   const unsupported: string[] = [];
   if (inline) {
-    collectHooks(object(inline.hooks) ?? inline, hooks, unsupported);
+    collectHooks(app, object(inline.hooks) ?? inline, hooks, unsupported);
   }
   const seen = new Set<string>();
   for (const candidate of paths) {
@@ -288,7 +304,7 @@ async function readHooks(
       const raw = await readJson(file);
       const events = object(raw?.hooks) ?? raw;
       if (events) {
-        collectHooks(events, hooks, unsupported);
+        collectHooks(app, events, hooks, unsupported);
       }
     }
   }
@@ -373,7 +389,7 @@ export async function inspectBundlePlugin(
   const hookPaths = app === "codex"
     ? declaredHookPaths.length > 0 || inlineHooks ? declaredHookPaths : ["hooks/hooks.json"]
     : [...new Set(["hooks/hooks.json", ...declaredHookPaths])];
-  const hookResult = await readHooks(root, hookPaths, inlineHooks);
+  const hookResult = await readHooks(app, root, hookPaths, inlineHooks);
   const monitorResult = app === "claude-code"
     ? await readMonitors(root, manifest)
     : { monitors: [], unsupported: [] };
@@ -663,6 +679,7 @@ export async function invokeBundleHooks(
   event: string,
   payload: JsonObject,
   matchValue = "",
+  evaluatePrompt?: (prompt: string, payload: JsonObject, timeoutMs: number) => Promise<JsonObject | undefined>,
 ): Promise<JsonObject[]> {
   const results: JsonObject[] = [];
   let currentPayload = payload;
@@ -671,7 +688,19 @@ export async function invokeBundleHooks(
       if (hook.event !== event || !matcherMatches(hook.matcher, matchValue)) {
         continue;
       }
-      const command = expandRoot(hook.command, plugin.path);
+      if (hook.type === "prompt") {
+        if (!evaluatePrompt || !hook.prompt) {
+          continue;
+        }
+        try {
+          const result = await evaluatePrompt(hook.prompt, currentPayload, hook.timeoutMs);
+          if (result) results.push(result);
+        } catch (error) {
+          console.warn(`Babelfish prompt hook ${plugin.key}/${event} failed: ${(error as Error).message}`);
+        }
+        continue;
+      }
+      const command = expandRoot(hook.command!, plugin.path);
       let output: Awaited<ReturnType<typeof runHookCommand>>;
       try {
         output = await runHookCommand(command, plugin.path, currentPayload, hook.timeoutMs);

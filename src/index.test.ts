@@ -29,6 +29,12 @@ describe("native OpenClaw hook entry", () => {
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
         JSON.stringify({ hooks: { hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "node hook.mjs" }] }] } } }),
       );
+      const promptPluginRoot = path.join(bundleRoot, "claude-code", "model-hooks");
+      await fs.mkdir(path.join(promptPluginRoot, ".claude-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(promptPluginRoot, ".claude-plugin", "plugin.json"),
+        JSON.stringify({ hooks: { hooks: { Stop: [{ hooks: [{ type: "prompt", prompt: "Check $ARGUMENTS" }] }] } } }),
+      );
       const monitorRoot = path.join(bundleRoot, "claude-code", "monitor-plugin");
       await fs.mkdir(path.join(monitorRoot, ".claude-plugin"), { recursive: true });
       await fs.mkdir(path.join(monitorRoot, "monitors"));
@@ -43,6 +49,7 @@ describe("native OpenClaw hook entry", () => {
       const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
       const api = {
         logger: { warn: vi.fn() },
+        runtime: { llm: { complete: vi.fn(async () => ({ text: '{"ok":false,"reason":"model denied"}' })) } },
         on: vi.fn((name: string, handler: (event: unknown, ctx: unknown) => unknown) => {
           hooks.set(name, handler);
         }),
@@ -95,6 +102,12 @@ describe("native OpenClaw hook entry", () => {
       await expect(
         hooks.get("agent_turn_prepare")?.({}, { runId: "run-context" }),
       ).resolves.toEqual({ prependContext: "fixture context" });
+      await expect(
+        hooks.get("before_agent_finalize")?.({ sessionId: "session-1" }, { sessionId: "session-1" }),
+      ).resolves.toMatchObject({ action: "revise", reason: "model denied" });
+      expect(api.runtime.llm.complete).toHaveBeenCalledWith(expect.objectContaining({
+        purpose: "babelfish-hook-evaluation",
+      }));
 
       await hooks.get("model_call_ended")?.({ outcome: "error" }, { sessionId: "session-1" });
       await hooks.get("model_call_ended")?.({ outcome: "success" }, { sessionId: "session-1" });

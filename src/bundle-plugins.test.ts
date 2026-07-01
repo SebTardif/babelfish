@@ -83,6 +83,21 @@ describe("bundle plugins", () => {
     ]);
   });
 
+  it("evaluates prompt hook handlers through the host callback", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-root-"));
+    const pluginRoot = path.join(rootDir, "claude-code", "fixture");
+    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ hooks: { hooks: { UserPromptSubmit: [{ hooks: [{ type: "prompt", prompt: "Check $ARGUMENTS" }] }] } } }),
+    );
+    const config = { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: 1000, env: {} };
+    const evaluate = vi.fn(async () => ({ decision: "block", reason: "model denied" }));
+    await expect(invokeBundleHooks(config, "UserPromptSubmit", { prompt: "deny" }, "", evaluate))
+      .resolves.toEqual([{ decision: "block", reason: "model denied" }]);
+    expect(evaluate).toHaveBeenCalledWith("Check $ARGUMENTS", expect.objectContaining({ prompt: "deny" }), 60_000);
+  });
+
   it("merges conventional paths and inline MCP servers", async () => {
     const root = await fixture("claude-code");
     await fs.mkdir(path.join(root, "extra", "custom"), { recursive: true });

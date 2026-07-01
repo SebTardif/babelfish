@@ -110,7 +110,7 @@ format does not provide that surface.
 | Stop/finalization hooks | Full | Full | Full | Hermes finalization is observer-only; Codex and Claude continue/block decisions map directly |
 | Pre/post compaction hooks | N/A | Full | Full | Observation hooks run around OpenClaw compaction |
 | Subagent lifecycle hooks | Full | Full | Full | Mapped to OpenClaw subagent start/end hooks |
-| Prompt or agent hook handlers | N/A | No | No | Only command hook handlers execute |
+| Prompt or agent hook handlers | N/A | No | Partial | Claude prompt handlers use the active OpenClaw model; Codex prompt handlers and multi-turn agent handlers remain listed only |
 | Notification hooks | N/A | N/A | No | Detected but not executed |
 | Tool-result middleware | Full | N/A | N/A | Maps to OpenClaw tool-result middleware |
 | LLM/request/execution middleware | No | N/A | N/A | Detected and reported; no stable equivalent is used |
@@ -132,8 +132,9 @@ directories are copied intact. Markdown commands, agents, and output styles are
 converted to user-invoked OpenClaw skills.
 
 Command hooks run with `${CLAUDE_PLUGIN_ROOT}` set to the installed plugin
-directory. `command` handlers are supported. `prompt` and `agent` hook handlers
-are reported as unsupported.
+directory. `command` handlers are supported. Single-turn `prompt` handlers use
+the active OpenClaw model; multi-turn `agent` handlers are reported as
+unsupported.
 
 ### Codex
 

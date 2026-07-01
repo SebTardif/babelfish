@@ -47,6 +47,16 @@ type OpenClawCliProgram = {
   command(name: string): OpenClawCliCommand;
 };
 type OpenClawApi = {
+  runtime?: {
+    llm?: {
+      complete(params: {
+        messages: Array<{ role: "user"; content: string }>;
+        maxTokens?: number;
+        temperature?: number;
+        purpose?: string;
+      }): Promise<{ text: string }>;
+    };
+  };
   logger?: Logger;
   on(hook: string, handler: (event: unknown, ctx: unknown) => unknown): void;
   registerTool(
@@ -230,8 +240,35 @@ function bundlePayload(eventName: string, event: unknown, ctx: unknown): Record<
   };
 }
 
+let promptHookEvaluator: Parameters<typeof invokeBundleHooks>[4];
+
 async function bundleHooks(eventName: string, event: unknown, ctx: unknown, match = "") {
-  return invokeBundleHooks(config, eventName, bundlePayload(eventName, event, ctx), match);
+  return invokeBundleHooks(config, eventName, bundlePayload(eventName, event, ctx), match, promptHookEvaluator);
+}
+
+function configurePromptHooks(api: OpenClawApi): void {
+  if (!api.runtime?.llm) return;
+  promptHookEvaluator = async (template, payload, timeoutMs) => {
+    const argumentsJson = JSON.stringify(payload);
+    const prompt = template.includes("$ARGUMENTS")
+      ? template.replaceAll("$ARGUMENTS", argumentsJson)
+      : `${template}\n\n${argumentsJson}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await api.runtime!.llm!.complete({
+      messages: [{ role: "user", content: prompt }],
+      maxTokens: 300,
+      temperature: 0,
+      purpose: "babelfish-hook-evaluation",
+    });
+    const match = response.text.match(/\{[\s\S]*\}/);
+    const decision = match ? record(JSON.parse(match[0])) : {};
+    if (decision.ok === true) return undefined;
+    if (decision.ok === false) {
+      return { decision: "block", reason: typeof decision.reason === "string" ? decision.reason : "Prompt hook blocked" };
+    }
+    throw new Error("Prompt hook returned no boolean ok decision");
+  };
 }
 
 function registerWarnings(api: OpenClawApi): void {
@@ -630,6 +667,7 @@ export default {
   name: "Babelfish",
   description: "Use plugins from supported coding and agent apps in OpenClaw.",
   register(api: OpenClawApi): void {
+    configurePromptHooks(api);
     registerNativeTools(api);
     registerBabelfishCli(api);
     registerHermesCommands(api);
