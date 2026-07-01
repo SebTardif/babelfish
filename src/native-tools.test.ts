@@ -329,7 +329,10 @@ describe("native generated tools", () => {
     await fs.mkdir(path.join(plugin, "skills", "review"), { recursive: true });
     await fs.writeFile(path.join(plugin, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: review\n---\n");
     await fs.mkdir(path.join(plugin, "commands", "git"), { recursive: true });
-    await fs.writeFile(path.join(plugin, "commands", "git", "commit.md"), "Commit the change.");
+    await fs.writeFile(
+      path.join(plugin, "commands", "git", "commit.md"),
+      "---\ndescription: Commit selected files\nargument-hint: '[files]'\nallowed-tools: Bash(git status *)\n---\nCommit $ARGUMENTS.",
+    );
     await fs.mkdir(path.join(root, "skills"));
     await fs.writeFile(path.join(root, "openclaw.plugin.json"), JSON.stringify({ id: "babelfish", contracts: {} }));
     await regenerateNativeTools(
@@ -339,6 +342,6 @@ describe("native generated tools", () => {
     await expect(fs.readFile(path.join(root, "skills", "babelfish-bundles", "claude-code-fixture-review", "SKILL.md"), "utf8"))
       .resolves.toContain("name: claude-code-fixture-review");
     await expect(fs.readFile(path.join(root, "skills", "babelfish-bundles", "claude-code-fixture-git-commit", "SKILL.md"), "utf8"))
-      .resolves.toContain("Commit the change.");
+      .resolves.toMatch(/description: "Commit selected files"[\s\S]*argument-hint: '\[files\]'[\s\S]*allowed-tools: Bash\(git status \*\)[\s\S]*disable-model-invocation: true[\s\S]*Commit \$ARGUMENTS\./);
   });
 });

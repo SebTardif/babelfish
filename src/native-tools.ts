@@ -380,6 +380,7 @@ async function restoreFile(target: string, contents: string | undefined): Promis
 function convertedSkillMarkdown(name: string, source: string): string {
   let body = source;
   let description = `Imported plugin command ${name}`;
+  let preserved: string[] = [];
   if (source.startsWith("---\n")) {
     const end = source.indexOf("\n---\n", 4);
     if (end >= 0) {
@@ -388,6 +389,9 @@ function convertedSkillMarkdown(name: string, source: string): string {
       if (match?.[1]) {
         description = match[1].trim().replace(/^['"]|['"]$/g, "");
       }
+      preserved = frontmatter
+        .split("\n")
+        .filter((line) => !/^(name|description|disable-model-invocation):/i.test(line));
       body = source.slice(end + 5);
     }
   }
@@ -395,6 +399,7 @@ function convertedSkillMarkdown(name: string, source: string): string {
     "---",
     `name: ${name}`,
     `description: ${JSON.stringify(description)}`,
+    ...preserved,
     "disable-model-invocation: true",
     "---",
     "",
