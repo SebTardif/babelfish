@@ -103,6 +103,22 @@ describe("bundle plugins", () => {
     expect(plugin.servers.map((server) => server.name)).toEqual(["inline"]);
   });
 
+  it("discovers Claude output styles", async () => {
+    const root = await fixture("claude-code");
+    await fs.mkdir(path.join(root, "output-styles"));
+    await fs.writeFile(
+      path.join(root, "output-styles", "brief.md"),
+      "---\nname: Brief\ndescription: Keep replies short\nkeep-coding-instructions: true\n---\nAnswer in three sentences.",
+    );
+    const plugin = await inspectBundlePlugin("claude-code", root);
+    expect(plugin.outputStyles).toEqual([{
+      name: "Brief",
+      description: "Keep replies short",
+      instructions: "Answer in three sentences.",
+      keepCodingInstructions: true,
+    }]);
+  });
+
   it("loads declared hook directories and gives inline MCP servers precedence", async () => {
     const root = await fixture("codex");
     await fs.mkdir(path.join(root, "custom-hooks", "nested"), { recursive: true });

@@ -90,6 +90,14 @@ export type GeneratedCommandEntry = {
   argsHint: string;
 };
 
+export type GeneratedOutputStyleEntry = {
+  name: string;
+  plugin: string;
+  description: string;
+  instructions: string;
+  keepCodingInstructions: boolean;
+};
+
 export type GeneratedNativeToolRegistry = {
   generatedAt: string;
   installDir: string;
@@ -98,6 +106,7 @@ export type GeneratedNativeToolRegistry = {
   tools: NativeToolEntry[];
   commands: GeneratedCommandEntry[];
   cliCommands: GeneratedCommandEntry[];
+  outputStyles: GeneratedOutputStyleEntry[];
 };
 
 function asObject(value: unknown): JsonObject | undefined {
@@ -297,6 +306,9 @@ export function readGeneratedNativeToolRegistry(root = packageRoot): GeneratedNa
       cliCommands: Array.isArray(parsed.cliCommands)
         ? parsed.cliCommands.filter(isCommandEntry)
         : [],
+      outputStyles: Array.isArray(parsed.outputStyles)
+        ? parsed.outputStyles.filter(isOutputStyleEntry)
+        : [],
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -310,8 +322,16 @@ export function readGeneratedNativeToolRegistry(root = packageRoot): GeneratedNa
       tools: [],
       commands: [],
       cliCommands: [],
+      outputStyles: [],
     };
   }
+}
+
+function isOutputStyleEntry(value: unknown): value is GeneratedOutputStyleEntry {
+  const item = asObject(value);
+  return typeof item?.name === "string" && typeof item.plugin === "string"
+    && typeof item.description === "string" && typeof item.instructions === "string"
+    && typeof item.keepCodingInstructions === "boolean";
 }
 
 function isNativeToolEntry(value: unknown): value is NativeToolEntry {
@@ -562,6 +582,11 @@ export async function regenerateNativeTools(
   tools.push(...await buildBundleToolEntries(bundlePlugins, tools.map((tool) => tool.name), config.timeoutMs));
   const commands = buildCommandEntries(list, (plugin) => plugin.commands, OPENCLAW_RESERVED_COMMANDS);
   const cliCommands = buildCommandEntries(list, (plugin) => plugin.cliCommands ?? [], OPENCLAW_CLI_ROOTS);
+  const outputStyles = bundlePlugins.flatMap((plugin) => plugin.outputStyles.map((style) => ({
+    ...style,
+    plugin: plugin.key,
+    name: `babelfish-style-${skillSlug(plugin.key)}-${skillSlug(style.name)}`,
+  })));
   const registry: GeneratedNativeToolRegistry = {
     generatedAt: new Date().toISOString(),
     installDir: list.installDir,
@@ -572,6 +597,7 @@ export async function regenerateNativeTools(
     tools,
     commands,
     cliCommands,
+    outputStyles,
   };
   const registryTarget = registryPath(root);
   const manifestTarget = manifestPath(root);

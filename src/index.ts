@@ -20,6 +20,7 @@ import {
   NATIVE_BRIDGE_TOOL_NAMES,
   readGeneratedNativeToolRegistry,
   type GeneratedCommandEntry,
+  type GeneratedOutputStyleEntry,
   type NativeTool,
   type NativeToolContext,
   type NativeToolEntry,
@@ -88,6 +89,7 @@ const sessionStartContext = new Map<string, string[]>();
 const sessionStartPending = new Map<string, Promise<void>>();
 const sessionStartSources = new Map<string, string>();
 const promptContextByRun = new Map<string, string[]>();
+const outputStyleBySession = new Map<string, GeneratedOutputStyleEntry>();
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -305,6 +307,24 @@ export function registerHermesCommands(api: OpenClawApi, generated?: GeneratedCo
   }
 }
 
+export function registerOutputStyles(api: OpenClawApi, generated?: GeneratedOutputStyleEntry[]): void {
+  const entries = generated ?? readGeneratedNativeToolRegistry().outputStyles;
+  for (const entry of entries) {
+    api.registerCommand({
+      name: entry.name,
+      description: entry.description,
+      handler: (ctx) => {
+        const key = ctx.sessionKey ?? ctx.sessionId;
+        if (!key) {
+          return { text: "Output styles require an active session." };
+        }
+        outputStyleBySession.set(key, entry);
+        return { text: `Output style selected: ${entry.description}` };
+      },
+    });
+  }
+}
+
 export function registerHermesCliCommands(
   api: OpenClawApi,
   generated?: GeneratedCommandEntry[],
@@ -391,6 +411,12 @@ function registerRunHooks(api: OpenClawApi): void {
     if (key) {
       contextParts.unshift(...(sessionStartContext.get(key) ?? []));
       sessionStartContext.delete(key);
+      const style = outputStyleBySession.get(key);
+      if (style) {
+        contextParts.push(style.keepCodingInstructions
+          ? style.instructions
+          : `Use the following response style instead of the default coding-oriented response style:\n\n${style.instructions}`);
+      }
     }
     return contextParts.length > 0 ? { prependContext: contextParts.join("\n\n") } : undefined;
   });
@@ -504,6 +530,7 @@ function registerSessionHooks(api: OpenClawApi): void {
         if (key) {
           sessionStartContext.delete(key);
           sessionStartPending.delete(key);
+          outputStyleBySession.delete(key);
         }
         releaseHermesBridge(config, runtimeContext);
       }
@@ -553,6 +580,7 @@ export default {
     registerNativeTools(api);
     registerBabelfishCli(api);
     registerHermesCommands(api);
+    registerOutputStyles(api);
     registerHermesCliCommands(api);
     registerWarnings(api);
     registerToolHooks(api);

@@ -52,6 +52,22 @@ describe("native OpenClaw hook entry", () => {
       ).resolves.toEqual({ block: true, blockReason: "blocked" });
       expect(api.registerAgentToolResultMiddleware).toHaveBeenCalledOnce();
 
+      const styleApi = { registerCommand: vi.fn() };
+      module.registerOutputStyles(styleApi, [{
+        name: "babelfish-style-fixture-brief",
+        plugin: "fixture",
+        description: "Keep replies short",
+        instructions: "Answer briefly.",
+        keepCodingInstructions: true,
+      }]);
+      const styleCommand = styleApi.registerCommand.mock.calls[0]?.[0];
+      expect(styleCommand.handler({ sessionId: "styled-session" })).toEqual({
+        text: "Output style selected: Keep replies short",
+      });
+      await expect(
+        hooks.get("agent_turn_prepare")?.({}, { sessionId: "styled-session" }),
+      ).resolves.toEqual({ prependContext: "fixture context\n\nAnswer briefly." });
+
       await expect(
         hooks.get("before_agent_run")?.({ prompt: "deny" }, { runId: "run-blocked" }),
       ).resolves.toEqual({ outcome: "block", reason: "denied", message: "denied" });

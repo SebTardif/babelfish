@@ -37,6 +37,13 @@ export type BundleHook = {
   timeoutMs: number;
 };
 
+export type BundleOutputStyle = {
+  name: string;
+  description: string;
+  instructions: string;
+  keepCodingInstructions: boolean;
+};
+
 export type BundlePlugin = {
   app: Exclude<SupportedApp, "hermes">;
   key: string;
@@ -47,6 +54,7 @@ export type BundlePlugin = {
   skillDirs: string[];
   servers: BundleServer[];
   hooks: BundleHook[];
+  outputStyles: BundleOutputStyle[];
   unsupported: string[];
 };
 
@@ -85,6 +93,29 @@ function relativePaths(value: unknown, fallback: string[]): string[] {
   return [...new Set(
     [...fallback, ...declared].map((entry) => path.normalize(entry).replace(/[\\/]+$/, "")),
   )];
+}
+
+async function readOutputStyles(root: string, candidates: string[]): Promise<BundleOutputStyle[]> {
+  const styles: BundleOutputStyle[] = [];
+  for (const directory of await existingPaths(root, candidates)) {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) {
+        continue;
+      }
+      const source = await fs.readFile(path.join(directory, entry.name), "utf8");
+      const end = source.startsWith("---\n") ? source.indexOf("\n---\n", 4) : -1;
+      const frontmatter = end >= 0 ? source.slice(4, end) : "";
+      const field = (name: string) => frontmatter.match(new RegExp(`^${name}:\\s*(.+)$`, "m"))?.[1]
+        ?.trim().replace(/^['"]|['"]$/g, "");
+      styles.push({
+        name: field("name") ?? path.basename(entry.name, path.extname(entry.name)),
+        description: field("description") ?? "Imported output style",
+        instructions: (end >= 0 ? source.slice(end + 5) : source).trim(),
+        keepCodingInstructions: /^(true|yes|1)$/i.test(field("keep-coding-instructions") ?? ""),
+      });
+    }
+  }
+  return styles;
 }
 
 function underRoot(root: string, value: string): string {
@@ -278,6 +309,9 @@ export async function inspectBundlePlugin(
         ...relativePaths(manifest.outputStyles, ["output-styles"]),
       ]
     : relativePaths(manifest.skills, ["skills"]);
+  const outputStyleCandidates = app === "claude-code"
+    ? relativePaths(manifest.outputStyles, ["output-styles"])
+    : [];
   const inlineMcp = inlineServers(manifest.mcpServers);
   for (const server of inlineMcp) {
     server.baseDir = root;
@@ -324,6 +358,7 @@ export async function inspectBundlePlugin(
     skillDirs: await existingPaths(root, [...new Set(skillCandidates)]),
     servers: supportedServers,
     hooks: hookResult.hooks,
+    outputStyles: await readOutputStyles(root, outputStyleCandidates),
     unsupported,
   };
 }
@@ -341,6 +376,7 @@ export function summarizeBundlePlugin(plugin: BundlePlugin) {
       transport: typeof server.config.url === "string" ? (server.config.type ?? "http") : "stdio",
     })),
     hooks: plugin.hooks.map((hook) => ({ event: hook.event, matcher: hook.matcher })),
+    outputStyles: plugin.outputStyles.map((style) => style.name),
     unsupported: plugin.unsupported,
   };
 }
