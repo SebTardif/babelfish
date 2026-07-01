@@ -4,13 +4,11 @@
 
 # Babelfish
 
-Babelfish lets OpenClaw install and use plugins made for other coding and agent
-apps.
-
-Install a source plugin through the human-operated OpenClaw CLI, restart
-OpenClaw, and Babelfish exposes each compatible contribution through the
-closest native OpenClaw surface. Unsupported contributions are reported rather
-than silently approximated.
+Babelfish brings plugins from Claude Code, Codex, and Hermes Agent into
+OpenClaw. Install a plugin from its Git repository, restart OpenClaw, and its
+supported tools, skills, commands, and hooks become available automatically.
+If part of a plugin is not supported yet, Babelfish reports what it skipped
+instead of failing silently.
 
 ## Install
 
@@ -45,8 +43,14 @@ Supported app identifiers are `claude-code`, `codex`, and `hermes`.
 Examples:
 
 ```bash
-openclaw babelfish install claude-code https://github.com/owner/plugin.git
-openclaw babelfish install codex https://github.com/owner/plugin.git
+# Ars Contexta: knowledge-system skills and lifecycle hooks for Claude Code
+openclaw babelfish install claude-code https://github.com/agenticnotetaking/arscontexta.git
+
+# Kotlin Agent Skills: JetBrains-maintained Kotlin skills for Codex
+openclaw babelfish install codex https://github.com/Kotlin/kotlin-agent-skills.git
+
+# Hermes Web Search Plus: multi-provider search and extraction tools for Hermes Agent
+openclaw babelfish install hermes https://github.com/robbyczgw-cla/hermes-web-search-plus.git
 ```
 
 Restart OpenClaw after installing or removing a plugin. OpenClaw plugin
