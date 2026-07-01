@@ -174,12 +174,25 @@ External plugins need conversation access for message and run hooks:
 
 ## Optional MCP compatibility mode
 
-The separate compatibility server is not part of the default OpenClaw install
-path:
+Use this mode only when an MCP client needs direct access to installed Hermes
+plugins without loading Babelfish as a native OpenClaw plugin. It starts a
+stdio MCP server that exposes available Hermes tools and commands, a read-only
+installed-plugin listing, and helpers for starting, checking, or stopping
+long-running Hermes calls.
+
+This is a compatibility fallback, not the recommended OpenClaw path. It covers
+Hermes plugins only and does not provide Babelfish's native OpenClaw skills,
+hooks, middleware, or generated CLI commands. For normal OpenClaw use, install
+and enable Babelfish as described above instead.
+
+Configure an MCP client to launch:
 
 ```bash
 babelfish mcp
 ```
+
+The process communicates over standard input/output and runs until the MCP
+client disconnects.
 
 ## Verification
 
