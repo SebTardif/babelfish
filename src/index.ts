@@ -87,7 +87,7 @@ const config = resolveConfig(undefined);
 const sessionStartContext = new Map<string, string[]>();
 const sessionStartPending = new Map<string, Promise<void>>();
 const sessionStartSources = new Map<string, string>();
-const submittedPromptRuns = new Set<string>();
+const promptContextByRun = new Map<string, string[]>();
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -131,6 +131,13 @@ function sessionKey(event: unknown, ctx: unknown): string | undefined {
   const rawEvent = record(event);
   const rawContext = record(ctx);
   const value = rawContext.sessionKey ?? rawContext.sessionId ?? rawEvent.sessionKey ?? rawEvent.sessionId;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function runKey(event: unknown, ctx: unknown): string | undefined {
+  const rawEvent = record(event);
+  const rawContext = record(ctx);
+  const value = rawContext.runId ?? rawContext.turnId ?? rawEvent.runId ?? rawEvent.turnId;
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
@@ -346,26 +353,40 @@ export function registerHermesCliCommands(
 }
 
 function registerRunHooks(api: OpenClawApi): void {
+  api.on("before_agent_run", async (event, ctx) => {
+    const imported = await bundleHooks("UserPromptSubmit", event, ctx);
+    const block = imported.map(hookBlock).find((decision) => decision.block);
+    if (block) {
+      return {
+        outcome: "block",
+        reason: block.reason ?? "Blocked by imported plugin hook",
+        message: block.reason,
+      };
+    }
+    const key = runKey(event, ctx);
+    const additional = imported
+      .map(hookAdditionalContext)
+      .filter((value): value is string => Boolean(value));
+    if (key && additional.length > 0) {
+      promptContextByRun.set(key, additional);
+    }
+    return { outcome: "pass" };
+  });
+
   api.on("agent_turn_prepare", async (event, ctx) => {
     const hookResult = await invokeHook("pre_llm_call", event, ctx);
     const contextParts = hookResult.results
       .map((result) => typeof result === "string" ? result : record(result).context)
       .filter((value): value is string => typeof value === "string" && value.length > 0);
-    const rawEvent = record(event);
     const key = sessionKey(event, ctx);
     if (key) {
       await sessionStartPending.get(key);
       sessionStartPending.delete(key);
     }
-    const rawContext = record(ctx);
-    const runId = rawContext.runId ?? rawContext.turnId ?? rawEvent.runId ?? rawEvent.turnId;
-    const promptRunKey = typeof runId === "string" && runId.length > 0 ? runId : undefined;
-    if (!promptRunKey || !submittedPromptRuns.has(promptRunKey)) {
-      const imported = await bundleHooks("UserPromptSubmit", event, ctx);
-      contextParts.push(...imported.map(hookAdditionalContext).filter((value): value is string => Boolean(value)));
-      if (promptRunKey) {
-        submittedPromptRuns.add(promptRunKey);
-      }
+    const promptRunKey = runKey(event, ctx);
+    if (promptRunKey) {
+      contextParts.push(...(promptContextByRun.get(promptRunKey) ?? []));
+      promptContextByRun.delete(promptRunKey);
     }
     if (key) {
       contextParts.unshift(...(sessionStartContext.get(key) ?? []));
@@ -389,9 +410,9 @@ function registerRunHooks(api: OpenClawApi): void {
   });
   api.on("agent_end", async (event, ctx) => {
     await invokeHook("on_session_end", event, ctx);
-    const runId = record(event).runId ?? record(ctx).runId;
-    if (typeof runId === "string") {
-      submittedPromptRuns.delete(runId);
+    const key = runKey(event, ctx);
+    if (key) {
+      promptContextByRun.delete(key);
     }
   });
   api.on("before_agent_finalize", async (event, ctx) => {

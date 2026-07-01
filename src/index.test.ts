@@ -12,10 +12,23 @@ describe("native OpenClaw hook entry", () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-native-"));
     await copyFixture(installDir);
     const previous = process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR;
+    const previousRoot = process.env.OPENCLAW_BABELFISH_ROOT;
     const hookLog = path.join(installDir, "hook.log");
+    const bundleRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-bundles-"));
     try {
       process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR = installDir;
+      process.env.OPENCLAW_BABELFISH_ROOT = bundleRoot;
       process.env.BABELFISH_TEST_HOOK_LOG = hookLog;
+      const pluginRoot = path.join(bundleRoot, "codex", "prompt-hooks");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, "hook.mjs"),
+        "let input=''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { const event=JSON.parse(input); console.log(JSON.stringify(event.prompt === 'deny' ? {decision:'block',reason:'denied'} : {hookSpecificOutput:{additionalContext:'prompt context'}})); });",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ hooks: { hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "node hook.mjs" }] }] } } }),
+      );
       vi.resetModules();
       const module = await import("./index.js");
       const entry = module.default;
@@ -38,6 +51,19 @@ describe("native OpenClaw hook entry", () => {
         hooks.get("before_tool_call")?.({ toolName: "blocked" }, { sessionId: "session-1" }),
       ).resolves.toEqual({ block: true, blockReason: "blocked" });
       expect(api.registerAgentToolResultMiddleware).toHaveBeenCalledOnce();
+
+      await expect(
+        hooks.get("before_agent_run")?.({ prompt: "deny" }, { runId: "run-blocked" }),
+      ).resolves.toEqual({ outcome: "block", reason: "denied", message: "denied" });
+      await expect(
+        hooks.get("before_agent_run")?.({ prompt: "allow" }, { runId: "run-context" }),
+      ).resolves.toEqual({ outcome: "pass" });
+      await expect(
+        hooks.get("agent_turn_prepare")?.({}, { runId: "run-context" }),
+      ).resolves.toEqual({ prependContext: "fixture context\n\nprompt context" });
+      await expect(
+        hooks.get("agent_turn_prepare")?.({}, { runId: "run-context" }),
+      ).resolves.toEqual({ prependContext: "fixture context" });
 
       await hooks.get("model_call_ended")?.({ outcome: "error" }, { sessionId: "session-1" });
       await hooks.get("model_call_ended")?.({ outcome: "success" }, { sessionId: "session-1" });
@@ -126,6 +152,11 @@ describe("native OpenClaw hook entry", () => {
         delete process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR;
       } else {
         process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR = previous;
+      }
+      if (previousRoot === undefined) {
+        delete process.env.OPENCLAW_BABELFISH_ROOT;
+      } else {
+        process.env.OPENCLAW_BABELFISH_ROOT = previousRoot;
       }
       delete process.env.BABELFISH_TEST_HOOK_LOG;
     }
