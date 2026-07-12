@@ -92,6 +92,57 @@ await server.connect(new StdioServerTransport());
       .resolves.toMatchObject({ details: { messages: [{ role: "user" }] } });
   }, 20_000);
 
+  it("generates only operations advertised by each MCP server", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-mcp-state-"));
+    const plugin = path.join(stateRoot, "codex", "fixture");
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-package-"));
+    const sdk = path.join(process.cwd(), "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm");
+    await fs.mkdir(path.join(plugin, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(path.join(plugin, ".codex-plugin", "plugin.json"), JSON.stringify({ name: "fixture" }));
+    await fs.writeFile(
+      path.join(plugin, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          tools: { command: "node", args: ["server.mjs", "tools"] },
+          resources: { command: "node", args: ["server.mjs", "resources"] },
+        },
+      }),
+    );
+    await fs.writeFile(path.join(plugin, "server.mjs"), `
+import { Server } from ${JSON.stringify(path.join(sdk, "server", "index.js"))};
+import { StdioServerTransport } from ${JSON.stringify(path.join(sdk, "server", "stdio.js"))};
+import { ListToolsRequestSchema, ListResourcesRequestSchema, ReadResourceRequestSchema } from ${JSON.stringify(path.join(sdk, "types.js"))};
+const mode = process.argv[2];
+const capabilities = mode === "tools" ? {tools:{}} : {resources:{}};
+const server = new Server({name:mode,version:"1"},{capabilities});
+if (mode === "tools") {
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({tools:[{name:"echo",inputSchema:{type:"object"}}]}));
+} else {
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({resources:[{uri:"memo://one",name:"one"}]}));
+  server.setRequestHandler(ReadResourceRequestSchema, async () => ({contents:[{uri:"memo://one",text:"resource body"}]}));
+}
+await server.connect(new StdioServerTransport());
+`);
+    await fs.mkdir(path.join(root, "skills"));
+    await fs.writeFile(path.join(root, "openclaw.plugin.json"), JSON.stringify({ id: "babelfish", contracts: {} }));
+
+    await regenerateNativeTools(
+      { installDir: path.join(stateRoot, "hermes"), rootDir: stateRoot, python: "python3", timeoutMs: 5000, env: {} },
+      { root },
+    );
+
+    const registry = JSON.parse(await fs.readFile(path.join(root, "babelfish.generated.json"), "utf8"));
+    expect(
+      registry.tools
+        .map((tool: { server?: string; originalName: string }) => `${tool.server}:${tool.originalName}`)
+        .sort(),
+    ).toEqual([
+      "resources:resources/list",
+      "resources:resources/read",
+      "tools:echo",
+    ]);
+  }, 20_000);
+
   it("maps MCP result blocks to OpenClaw text and image content", () => {
     expect(normalizeMcpContent([
       { type: "text", text: "ok" },

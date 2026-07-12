@@ -602,24 +602,40 @@ async function clientFor(plugin: BundlePlugin, server: BundleServer, timeoutMs: 
   return client;
 }
 
-export async function listBundleServerTools(
+export async function inspectBundleServer(
   plugin: BundlePlugin,
   server: BundleServer,
   timeoutMs: number,
 ) {
   const client = await clientFor(plugin, server, timeoutMs);
   try {
+    const advertised = client.getServerCapabilities();
+    const capabilities = {
+      tools: Boolean(advertised?.tools),
+      resources: Boolean(advertised?.resources),
+      prompts: Boolean(advertised?.prompts),
+    };
     const tools = [];
-    let cursor: string | undefined;
-    do {
-      const page = await client.listTools(cursor ? { cursor } : undefined, { timeout: timeoutMs });
-      tools.push(...page.tools);
-      cursor = typeof page.nextCursor === "string" ? page.nextCursor : undefined;
-    } while (cursor);
-    return tools;
+    if (capabilities.tools) {
+      let cursor: string | undefined;
+      do {
+        const page = await client.listTools(cursor ? { cursor } : undefined, { timeout: timeoutMs });
+        tools.push(...page.tools);
+        cursor = typeof page.nextCursor === "string" ? page.nextCursor : undefined;
+      } while (cursor);
+    }
+    return { capabilities, tools };
   } finally {
     await client.close();
   }
+}
+
+export async function listBundleServerTools(
+  plugin: BundlePlugin,
+  server: BundleServer,
+  timeoutMs: number,
+) {
+  return (await inspectBundleServer(plugin, server, timeoutMs)).tools;
 }
 
 export async function callBundleTool(
