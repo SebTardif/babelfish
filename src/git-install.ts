@@ -20,9 +20,9 @@ export type UninstallPluginParams = {
   afterChange?: () => Promise<void>;
 };
 
-function repoNameFromSource(source: string): string {
-  const clean = source.trim().replace(/[#?].*$/, "").replace(/\/$/, "");
-  const last = clean.split(/[/:]/).filter(Boolean).at(-1) ?? "plugin";
+export function repoNameFromSource(source: string): string {
+  const clean = source.trim().replace(/[#?].*$/, "").replace(/[\\/]+$/, "");
+  const last = clean.split(/[\\/:]/).filter(Boolean).at(-1) ?? "plugin";
   return last.replace(/\.git$/, "");
 }
 
