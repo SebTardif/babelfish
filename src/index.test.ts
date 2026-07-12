@@ -192,7 +192,7 @@ describe("native OpenClaw hook entry", () => {
       await hooks.get("model_call_ended")?.({ outcome: "error" }, { sessionId: "session-1" });
       await hooks.get("model_call_ended")?.({ outcome: "success" }, { sessionId: "session-1" });
       await expect(fs.readFile(hookLog, "utf8")).resolves.toBe(
-        "api_request_error\npost_api_request\n",
+        ["api_request_error", "post_api_request", ""].join(os.EOL),
       );
 
       const nativeApi = {
