@@ -22,11 +22,13 @@ public static class BabelfishJob {
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
     private const int JobObjectBasicAccountingInformation = 1;
     private const int JobObjectExtendedLimitInformation = 9;
-    private const uint CREATE_SUSPENDED = 0x00000004;
+    private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
     private const uint CREATE_NO_WINDOW = 0x08000000;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint INFINITE = 0xffffffff;
     private const uint HANDLE_FLAG_INHERIT = 0x00000001;
+    private static readonly UIntPtr PROC_THREAD_ATTRIBUTE_JOB_LIST =
+        new UIntPtr(0x0002000D);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
@@ -96,6 +98,12 @@ public static class BabelfishJob {
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct STARTUPINFOEX {
+        public STARTUPINFO StartupInfo;
+        public IntPtr lpAttributeList;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct PROCESS_INFORMATION {
         public IntPtr hProcess;
         public IntPtr hThread;
@@ -124,9 +132,6 @@ public static class BabelfishJob {
     );
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -139,21 +144,37 @@ public static class BabelfishJob {
         uint creationFlags,
         IntPtr environment,
         string currentDirectory,
-        ref STARTUPINFO startupInfo,
+        ref STARTUPINFOEX startupInfo,
         out PROCESS_INFORMATION processInformation
     );
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint ResumeThread(IntPtr thread);
+    private static extern bool InitializeProcThreadAttributeList(
+        IntPtr attributeList,
+        int attributeCount,
+        uint flags,
+        ref IntPtr size
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool UpdateProcThreadAttribute(
+        IntPtr attributeList,
+        uint flags,
+        UIntPtr attribute,
+        IntPtr value,
+        UIntPtr size,
+        IntPtr previousValue,
+        IntPtr returnSize
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
@@ -311,6 +332,83 @@ public static class BabelfishJob {
         return thread;
     }
 
+    private static PROCESS_INFORMATION CreateProcessInJob(
+        string commandShell,
+        StringBuilder commandLine,
+        IntPtr job,
+        IntPtr childStdin,
+        IntPtr childStdout,
+        IntPtr childStderr
+    ) {
+        var startup = new STARTUPINFOEX();
+        startup.StartupInfo.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFOEX));
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = childStdin;
+        startup.StartupInfo.hStdOutput = childStdout;
+        startup.StartupInfo.hStdError = childStderr;
+
+        IntPtr attributeListSize = IntPtr.Zero;
+        InitializeProcThreadAttributeList(
+            IntPtr.Zero,
+            1,
+            0,
+            ref attributeListSize
+        );
+        if (attributeListSize == IntPtr.Zero) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        startup.lpAttributeList = Marshal.AllocHGlobal(attributeListSize);
+        IntPtr jobList = Marshal.AllocHGlobal(IntPtr.Size);
+        bool initialized = false;
+        try {
+            if (!InitializeProcThreadAttributeList(
+                startup.lpAttributeList,
+                1,
+                0,
+                ref attributeListSize
+            )) {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            initialized = true;
+            Marshal.WriteIntPtr(jobList, job);
+            if (!UpdateProcThreadAttribute(
+                startup.lpAttributeList,
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST,
+                jobList,
+                new UIntPtr((uint)IntPtr.Size),
+                IntPtr.Zero,
+                IntPtr.Zero
+            )) {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+
+            PROCESS_INFORMATION child;
+            if (!CreateProcess(
+                commandShell,
+                commandLine,
+                IntPtr.Zero,
+                IntPtr.Zero,
+                true,
+                EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
+                IntPtr.Zero,
+                null,
+                ref startup,
+                out child
+            )) {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            return child;
+        } finally {
+            if (initialized) {
+                DeleteProcThreadAttributeList(startup.lpAttributeList);
+            }
+            Marshal.FreeHGlobal(startup.lpAttributeList);
+            Marshal.FreeHGlobal(jobList);
+        }
+    }
+
     public static int Run(string command, string mode, string commandShell) {
         IntPtr job = CreateKillOnCloseJob();
         IntPtr childStdin;
@@ -323,30 +421,20 @@ public static class BabelfishJob {
         CreateChildOutputPipe(out parentStdout, out childStdout);
         CreateChildOutputPipe(out parentStderr, out childStderr);
 
-        var startup = new STARTUPINFO();
-        startup.cb = (uint)Marshal.SizeOf(startup);
-        startup.dwFlags = STARTF_USESTDHANDLES;
-        startup.hStdInput = childStdin;
-        startup.hStdOutput = childStdout;
-        startup.hStdError = childStderr;
-
         var commandLine = new StringBuilder(
             "\"" + commandShell + "\" /d /s /c \"" + command + "\""
         );
         PROCESS_INFORMATION child;
-        if (!CreateProcess(
-            commandShell,
-            commandLine,
-            IntPtr.Zero,
-            IntPtr.Zero,
-            true,
-            CREATE_SUSPENDED | CREATE_NO_WINDOW,
-            IntPtr.Zero,
-            null,
-            ref startup,
-            out child
-        )) {
-            int error = Marshal.GetLastWin32Error();
+        try {
+            child = CreateProcessInJob(
+                commandShell,
+                commandLine,
+                job,
+                childStdin,
+                childStdout,
+                childStderr
+            );
+        } catch {
             CloseHandle(childStdin);
             CloseHandle(parentStdin);
             CloseHandle(parentStdout);
@@ -354,9 +442,10 @@ public static class BabelfishJob {
             CloseHandle(parentStderr);
             CloseHandle(childStderr);
             CloseHandle(job);
-            throw new Win32Exception(error);
+            throw;
         }
 
+        CloseHandle(child.hThread);
         CloseHandle(childStdin);
         CloseHandle(childStdout);
         CloseHandle(childStderr);
@@ -369,21 +458,6 @@ public static class BabelfishJob {
             parentStderr,
             Console.OpenStandardError()
         );
-
-        try {
-            if (!AssignProcessToJobObject(job, child.hProcess)) {
-                int error = Marshal.GetLastWin32Error();
-                TerminateProcess(child.hProcess, 1);
-                throw new Win32Exception(error);
-            }
-            if (ResumeThread(child.hThread) == 0xffffffff) {
-                int error = Marshal.GetLastWin32Error();
-                TerminateProcess(child.hProcess, 1);
-                throw new Win32Exception(error);
-            }
-        } finally {
-            CloseHandle(child.hThread);
-        }
 
         WaitForSingleObject(child.hProcess, INFINITE);
         uint exitCode;
