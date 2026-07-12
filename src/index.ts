@@ -29,7 +29,7 @@ import {
   type NativeToolEntry,
 } from "./native-tools.js";
 import {
-  spawnShellCommand,
+  spawnMonitorShellCommand,
   terminateShellProcessTree,
 } from "./shell-command.js";
 
@@ -197,7 +197,7 @@ async function startMonitors(
   for (const plugin of plugins) {
     for (const monitor of plugin.monitors) {
       const command = monitor.command.replaceAll("${CLAUDE_PROJECT_DIR}", workspace);
-      const child = spawnShellCommand(command, {
+      const child = spawnMonitorShellCommand(command, {
         cwd: workspace,
         detached: true,
         env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin.path, PLUGIN_ROOT: plugin.path },

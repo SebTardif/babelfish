@@ -18,6 +18,18 @@ export function spawnShellCommand(
   return spawnProcess("/bin/sh", ["-lc", command], options);
 }
 
+export function spawnMonitorShellCommand(
+  command: string,
+  options: Omit<SpawnOptions, "shell">,
+  platform: NodeJS.Platform = process.platform,
+  spawnProcess: SpawnProcess = spawn,
+): ChildProcess {
+  const monitorCommand = platform === "win32"
+    ? `${command}\r\nping.exe -t 127.0.0.1 >NUL`
+    : command;
+  return spawnShellCommand(monitorCommand, options, platform, spawnProcess);
+}
+
 export function terminateShellProcessTree(
   child: ChildProcess,
   platform: NodeJS.Platform = process.platform,

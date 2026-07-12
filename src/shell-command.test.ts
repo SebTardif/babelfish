@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import {
+  spawnMonitorShellCommand,
   spawnShellCommand,
   terminateShellProcessTree,
 } from "./shell-command.js";
@@ -27,6 +28,35 @@ describe("spawnShellCommand", () => {
       "echo ready",
       [],
       { cwd: "C:\\work", shell: true },
+    );
+  });
+});
+
+describe("spawnMonitorShellCommand", () => {
+  it("keeps the Windows shell alive as a durable process-tree root", () => {
+    const child = {} as ChildProcess;
+    const spawn = vi.fn(() => child);
+
+    expect(
+      spawnMonitorShellCommand("start /b worker.exe", {}, "win32", spawn),
+    ).toBe(child);
+    expect(spawn).toHaveBeenCalledWith(
+      "start /b worker.exe\r\nping.exe -t 127.0.0.1 >NUL",
+      [],
+      { shell: true },
+    );
+  });
+
+  it("does not alter POSIX monitor commands", () => {
+    const child = {} as ChildProcess;
+    const spawn = vi.fn(() => child);
+
+    spawnMonitorShellCommand("worker &", {}, "linux", spawn);
+
+    expect(spawn).toHaveBeenCalledWith(
+      "/bin/sh",
+      ["-lc", "worker &"],
+      {},
     );
   });
 });
