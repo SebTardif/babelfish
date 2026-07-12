@@ -23,7 +23,14 @@ describe("spawnShellCommand", () => {
     const child = new EventEmitter() as ChildProcess;
     const spawn = vi.fn(() => child);
 
-    expect(spawnShellCommand("echo ready", { cwd: "C:\\work" }, "win32", spawn)).toBe(child);
+    expect(
+      spawnShellCommand(
+        "echo ready",
+        { cwd: "C:\\work", detached: true },
+        "win32",
+        spawn,
+      ),
+    ).toBe(child);
     const [executable, args, options] = spawn.mock.calls[0]!;
     expect(executable).toBe(
       "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
@@ -36,7 +43,11 @@ describe("spawnShellCommand", () => {
       "-CommandBase64",
       expect.any(String),
     ]));
-    expect(options).toEqual({ cwd: "C:\\work", windowsHide: true });
+    expect(options).toEqual({
+      cwd: "C:\\work",
+      detached: false,
+      windowsHide: true,
+    });
     expect(Buffer.from(args.at(-1)!, "base64").toString("utf8")).toBe(
       "echo ready",
     );
@@ -49,14 +60,19 @@ describe("spawnMonitorShellCommand", () => {
     const spawn = vi.fn(() => child);
 
     expect(
-      spawnMonitorShellCommand("start /b worker.exe", {}, "win32", spawn),
+      spawnMonitorShellCommand(
+        "start /b worker.exe",
+        { detached: true },
+        "win32",
+        spawn,
+      ),
     ).toBe(child);
     const [executable, args, options] = spawn.mock.calls[0]!;
     expect(executable).toBe(
       "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     );
     expect(args).toEqual(expect.arrayContaining(["-Mode", "monitor"]));
-    expect(options).toEqual({ windowsHide: true });
+    expect(options).toEqual({ detached: false, windowsHide: true });
     expect(Buffer.from(args.at(-1)!, "base64").toString("utf8")).toBe(
       "start /b worker.exe",
     );

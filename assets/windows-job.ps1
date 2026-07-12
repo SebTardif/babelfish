@@ -12,9 +12,11 @@ $ErrorActionPreference = "Stop"
 Add-Type -TypeDefinition @"
 using System;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using Microsoft.Win32.SafeHandles;
 
 public static class BabelfishJob {
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
@@ -22,11 +24,8 @@ public static class BabelfishJob {
     private const uint CREATE_SUSPENDED = 0x00000004;
     private const uint CREATE_NO_WINDOW = 0x08000000;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
-    private const uint HANDLE_FLAG_INHERIT = 0x00000001;
     private const uint INFINITE = 0xffffffff;
-    private const int STD_INPUT_HANDLE = -10;
-    private const int STD_OUTPUT_HANDLE = -11;
-    private const int STD_ERROR_HANDLE = -12;
+    private const uint HANDLE_FLAG_INHERIT = 0x00000001;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
@@ -138,7 +137,12 @@ public static class BabelfishJob {
     private static extern bool CloseHandle(IntPtr handle);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GetStdHandle(int standardHandle);
+    private static extern bool CreatePipe(
+        out IntPtr readPipe,
+        out IntPtr writePipe,
+        IntPtr pipeAttributes,
+        uint size
+    );
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetHandleInformation(
@@ -175,23 +179,110 @@ public static class BabelfishJob {
         return job;
     }
 
-    private static void MakeInheritable(IntPtr handle) {
-        if (handle != IntPtr.Zero && handle != new IntPtr(-1)) {
-            SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+    private static void SetInheritable(IntPtr handle, bool inheritable) {
+        if (!SetHandleInformation(
+            handle,
+            HANDLE_FLAG_INHERIT,
+            inheritable ? HANDLE_FLAG_INHERIT : 0
+        )) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
         }
+    }
+
+    private static void CreateChildInputPipe(
+        out IntPtr childRead,
+        out IntPtr parentWrite
+    ) {
+        if (!CreatePipe(out childRead, out parentWrite, IntPtr.Zero, 0)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        try {
+            SetInheritable(childRead, true);
+            SetInheritable(parentWrite, false);
+        } catch {
+            CloseHandle(childRead);
+            CloseHandle(parentWrite);
+            throw;
+        }
+    }
+
+    private static void CreateChildOutputPipe(
+        out IntPtr parentRead,
+        out IntPtr childWrite
+    ) {
+        if (!CreatePipe(out parentRead, out childWrite, IntPtr.Zero, 0)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        try {
+            SetInheritable(parentRead, false);
+            SetInheritable(childWrite, true);
+        } catch {
+            CloseHandle(parentRead);
+            CloseHandle(childWrite);
+            throw;
+        }
+    }
+
+    private static void StartInputPump(IntPtr writeHandle) {
+        var destination = new FileStream(
+            new SafeFileHandle(writeHandle, true),
+            FileAccess.Write
+        );
+        var thread = new Thread(() => {
+            try {
+                Console.OpenStandardInput().CopyTo(destination);
+            } catch (IOException) {
+                // The child may exit before consuming all input.
+            } catch (ObjectDisposedException) {
+                // Process teardown can close the pipe while the pump is active.
+            } finally {
+                destination.Dispose();
+            }
+        });
+        thread.IsBackground = true;
+        thread.Start();
+    }
+
+    private static Thread StartOutputPump(IntPtr readHandle, Stream destination) {
+        var source = new FileStream(
+            new SafeFileHandle(readHandle, true),
+            FileAccess.Read
+        );
+        var thread = new Thread(() => {
+            try {
+                source.CopyTo(destination);
+                destination.Flush();
+            } catch (IOException) {
+                // The caller may close its output pipe during process teardown.
+            } catch (ObjectDisposedException) {
+                // Process teardown can close the pipe while the pump is active.
+            } finally {
+                source.Dispose();
+            }
+        });
+        thread.IsBackground = true;
+        thread.Start();
+        return thread;
     }
 
     public static int Run(string command, string mode, string commandShell) {
         IntPtr job = CreateKillOnCloseJob();
+        IntPtr childStdin;
+        IntPtr parentStdin;
+        IntPtr parentStdout;
+        IntPtr childStdout;
+        IntPtr parentStderr;
+        IntPtr childStderr;
+        CreateChildInputPipe(out childStdin, out parentStdin);
+        CreateChildOutputPipe(out parentStdout, out childStdout);
+        CreateChildOutputPipe(out parentStderr, out childStderr);
+
         var startup = new STARTUPINFO();
         startup.cb = (uint)Marshal.SizeOf(startup);
         startup.dwFlags = STARTF_USESTDHANDLES;
-        startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-        startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-        startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-        MakeInheritable(startup.hStdInput);
-        MakeInheritable(startup.hStdOutput);
-        MakeInheritable(startup.hStdError);
+        startup.hStdInput = childStdin;
+        startup.hStdOutput = childStdout;
+        startup.hStdError = childStderr;
 
         var commandLine = new StringBuilder(
             "\"" + commandShell + "\" /d /s /c \"" + command + "\""
@@ -210,9 +301,28 @@ public static class BabelfishJob {
             out child
         )) {
             int error = Marshal.GetLastWin32Error();
+            CloseHandle(childStdin);
+            CloseHandle(parentStdin);
+            CloseHandle(parentStdout);
+            CloseHandle(childStdout);
+            CloseHandle(parentStderr);
+            CloseHandle(childStderr);
             CloseHandle(job);
             throw new Win32Exception(error);
         }
+
+        CloseHandle(childStdin);
+        CloseHandle(childStdout);
+        CloseHandle(childStderr);
+        StartInputPump(parentStdin);
+        Thread stdoutPump = StartOutputPump(
+            parentStdout,
+            Console.OpenStandardOutput()
+        );
+        Thread stderrPump = StartOutputPump(
+            parentStderr,
+            Console.OpenStandardError()
+        );
 
         try {
             if (!AssignProcessToJobObject(job, child.hProcess)) {
@@ -248,6 +358,8 @@ public static class BabelfishJob {
             CloseHandle(job);
             throw new Win32Exception(error);
         }
+        stdoutPump.Join();
+        stderrPump.Join();
         CloseHandle(job);
         return unchecked((int)exitCode);
     }

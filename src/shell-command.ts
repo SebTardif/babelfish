@@ -46,7 +46,7 @@ function spawnWindowsJobCommand(
       "-CommandBase64",
       Buffer.from(command, "utf8").toString("base64"),
     ],
-    { ...options, windowsHide: true },
+    { ...options, detached: false, windowsHide: true },
   );
 }
 
