@@ -202,6 +202,7 @@ async function startMonitors(
         detached: true,
         env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin.path, PLUGIN_ROOT: plugin.path },
         stdio: ["ignore", "pipe", "inherit"],
+        windowsHide: true,
       });
       child.once("error", (error) => {
         warn(`Babelfish monitor ${plugin.key}/${monitor.name} failed to start: ${error.message}`);
