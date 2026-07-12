@@ -25,9 +25,10 @@ export function terminateShellProcessTree(
   spawnBinary: SpawnProcess = spawn,
   killProcess: typeof process.kill = process.kill,
 ): void {
-  if (!child.pid || child.exitCode != null || child.signalCode != null) return;
+  if (!child.pid) return;
 
   if (platform === "win32") {
+    if (child.exitCode != null || child.signalCode != null) return;
     let fellBack = false;
     const fallback = () => {
       if (fellBack) return;

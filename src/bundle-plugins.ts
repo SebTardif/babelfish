@@ -795,8 +795,10 @@ function runHookCommand(
   return new Promise((resolve, reject) => {
     const child = spawnShellCommand(command, {
       cwd,
+      detached: true,
       env: { ...process.env, CLAUDE_PLUGIN_ROOT: cwd, PLUGIN_ROOT: cwd },
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];

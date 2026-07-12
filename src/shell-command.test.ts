@@ -90,4 +90,19 @@ describe("terminateShellProcessTree", () => {
     expect(killProcess).not.toHaveBeenCalled();
     expect(child.kill).not.toHaveBeenCalled();
   });
+
+  it("still terminates a POSIX group after its leader exits", () => {
+    const child = {
+      pid: 42,
+      exitCode: 0,
+      signalCode: null,
+      kill: vi.fn(),
+    } as unknown as ChildProcess;
+    const killProcess = vi.fn();
+
+    terminateShellProcessTree(child, "linux", "SIGTERM", vi.fn(), killProcess);
+
+    expect(killProcess).toHaveBeenCalledWith(-42, "SIGTERM");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
 });
