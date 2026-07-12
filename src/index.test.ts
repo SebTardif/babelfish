@@ -38,10 +38,14 @@ describe("native OpenClaw hook entry", () => {
       const monitorRoot = path.join(bundleRoot, "claude-code", "monitor-plugin");
       const monitorPidPath = path.join(bundleRoot, "monitor-child.pid");
       const monitorCommand = process.platform === "win32"
-        ? 'node -e "console.log(\'ready\'); setTimeout(() => {}, 30000)"'
+        ? "node monitor.mjs"
         : `printf 'ready\\n'; sleep 30 </dev/null >/dev/null 2>&1 & echo $! > ${JSON.stringify(monitorPidPath)}`;
       await fs.mkdir(path.join(monitorRoot, ".claude-plugin"), { recursive: true });
       await fs.mkdir(path.join(monitorRoot, "monitors"));
+      await fs.writeFile(
+        path.join(monitorRoot, "monitor.mjs"),
+        "console.log('ready'); setTimeout(() => {}, 30000);",
+      );
       await fs.writeFile(path.join(monitorRoot, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "monitor-plugin" }));
       await fs.writeFile(
         path.join(monitorRoot, "monitors", "monitors.json"),
