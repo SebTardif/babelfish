@@ -36,12 +36,16 @@ describe("native OpenClaw hook entry", () => {
         JSON.stringify({ hooks: { hooks: { Stop: [{ hooks: [{ type: "prompt", prompt: "Check $ARGUMENTS" }] }] } } }),
       );
       const monitorRoot = path.join(bundleRoot, "claude-code", "monitor-plugin");
+      const monitorPidPath = path.join(bundleRoot, "monitor-child.pid");
+      const monitorCommand = process.platform === "win32"
+        ? 'node -e "console.log(\'ready\'); setTimeout(() => {}, 30000)"'
+        : `printf 'ready\\n'; sleep 30 </dev/null >/dev/null 2>&1 & echo $! > ${JSON.stringify(monitorPidPath)}`;
       await fs.mkdir(path.join(monitorRoot, ".claude-plugin"), { recursive: true });
       await fs.mkdir(path.join(monitorRoot, "monitors"));
       await fs.writeFile(path.join(monitorRoot, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "monitor-plugin" }));
       await fs.writeFile(
         path.join(monitorRoot, "monitors", "monitors.json"),
-        JSON.stringify([{ name: "status", description: "Status", command: "printf 'ready\\n'; sleep 30" }]),
+        JSON.stringify([{ name: "status", description: "Status", command: monitorCommand }]),
       );
       vi.resetModules();
       const module = await import("./index.js");
@@ -106,7 +110,18 @@ describe("native OpenClaw hook entry", () => {
       await expect(
         hooks.get("agent_turn_prepare")?.({}, { sessionId: "monitor-session" }),
       ).resolves.toEqual({ prependContext: "fixture context\n\nStatus: ready" });
+      const monitorPid = process.platform === "win32"
+        ? undefined
+        : Number((await fs.readFile(monitorPidPath, "utf8")).trim());
+      if (monitorPid) {
+        expect(() => process.kill(monitorPid, 0)).not.toThrow();
+      }
       await hooks.get("session_end")?.({ sessionId: "monitor-session" }, { sessionId: "monitor-session" });
+      if (monitorPid) {
+        await vi.waitFor(() => {
+          expect(() => process.kill(monitorPid, 0)).toThrow();
+        });
+      }
 
       await hooks.get("session_start")?.(
         { sessionId: "broken-monitor-session" },

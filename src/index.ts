@@ -208,6 +208,7 @@ async function startMonitors(
       });
       children.push(child);
       child.once("close", () => {
+        if (process.platform !== "win32") return;
         const active = monitorProcesses.get(key);
         if (active !== children) return;
         const index = active.indexOf(child);
