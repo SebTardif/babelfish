@@ -28,7 +28,10 @@ import {
   type NativeToolContext,
   type NativeToolEntry,
 } from "./native-tools.js";
-import { spawnShellCommand } from "./shell-command.js";
+import {
+  spawnShellCommand,
+  terminateShellProcessTree,
+} from "./shell-command.js";
 
 type Logger = { warn(message: string): void };
 type OpenClawCommandContext = {
@@ -173,17 +176,12 @@ function runKey(event: unknown, ctx: unknown): string | undefined {
 }
 
 function stopMonitors(key: string): void {
-  for (const child of monitorProcesses.get(key) ?? []) {
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, "SIGTERM");
-      } catch {
-        child.kill("SIGTERM");
-      }
-    }
-  }
+  const children = monitorProcesses.get(key) ?? [];
   monitorProcesses.delete(key);
   monitorContext.delete(key);
+  for (const child of children) {
+    terminateShellProcessTree(child);
+  }
 }
 
 async function startMonitors(
@@ -193,7 +191,10 @@ async function startMonitors(
 ): Promise<void> {
   stopMonitors(key);
   const children: ChildProcess[] = [];
-  for (const plugin of await listBundlePlugins(config, "claude-code")) {
+  monitorProcesses.set(key, children);
+  const plugins = await listBundlePlugins(config, "claude-code");
+  if (monitorProcesses.get(key) !== children) return;
+  for (const plugin of plugins) {
     for (const monitor of plugin.monitors) {
       const command = monitor.command.replaceAll("${CLAUDE_PROJECT_DIR}", workspace);
       const child = spawnShellCommand(command, {
@@ -215,14 +216,15 @@ async function startMonitors(
       lines.on("line", (line) => {
         const text = line.trim();
         if (!text) return;
+        if (!monitorProcesses.get(key)?.includes(child)) return;
         const pending = monitorContext.get(key) ?? [];
         pending.push(`${monitor.description}: ${text}`);
         monitorContext.set(key, pending.slice(-50));
       });
     }
   }
-  if (children.length > 0) {
-    monitorProcesses.set(key, children);
+  if (children.length === 0) {
+    monitorProcesses.delete(key);
   }
 }
 
