@@ -40,7 +40,7 @@
     "runtimeExtensions": ["./dist/index.js"]
   },
   "scripts": {
-    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json && esbuild src/index.ts --bundle --platform=node --format=esm --packages=bundle --external:@modelcontextprotocol/sdk/* --outfile=dist/index.js && esbuild src/bin.ts --bundle --platform=node --format=esm --packages=bundle --external:@modelcontextprotocol/sdk/* --banner:js='#!/usr/bin/env node' --outfile=dist/bin.js",
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/build.mjs",
     "test": "vitest run",
     "check": "npm run build && npm test",
     "pack:local": "npm run build && npm pack"
