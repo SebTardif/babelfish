@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 
-export type SpawnProcess = (command: string, options: SpawnOptions) => ChildProcess;
-export type SpawnBinary = (
+export type SpawnProcess = (
   command: string,
   args: string[],
   options: SpawnOptions,
@@ -10,15 +9,19 @@ export type SpawnBinary = (
 export function spawnShellCommand(
   command: string,
   options: Omit<SpawnOptions, "shell">,
+  platform: NodeJS.Platform = process.platform,
   spawnProcess: SpawnProcess = spawn,
 ): ChildProcess {
-  return spawnProcess(command, { ...options, shell: true });
+  if (platform === "win32") {
+    return spawnProcess(command, [], { ...options, shell: true });
+  }
+  return spawnProcess("/bin/sh", ["-lc", command], options);
 }
 
 export function terminateShellProcessTree(
   child: ChildProcess,
   platform: NodeJS.Platform = process.platform,
-  spawnBinary: SpawnBinary = spawn,
+  spawnBinary: SpawnProcess = spawn,
   killProcess: typeof process.kill = process.kill,
 ): void {
   if (!child.pid) return;

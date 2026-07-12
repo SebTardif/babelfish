@@ -6,15 +6,28 @@ import {
 } from "./shell-command.js";
 
 describe("spawnShellCommand", () => {
-  it("delegates command parsing to the platform shell", () => {
+  it("preserves POSIX login-shell execution", () => {
     const child = {} as ChildProcess;
     const spawn = vi.fn(() => child);
 
-    expect(spawnShellCommand("printf ready", { cwd: "/tmp" }, spawn)).toBe(child);
-    expect(spawn).toHaveBeenCalledWith("printf ready", {
-      cwd: "/tmp",
-      shell: true,
-    });
+    expect(spawnShellCommand("printf ready", { cwd: "/tmp" }, "linux", spawn)).toBe(child);
+    expect(spawn).toHaveBeenCalledWith(
+      "/bin/sh",
+      ["-lc", "printf ready"],
+      { cwd: "/tmp" },
+    );
+  });
+
+  it("delegates Windows command parsing to the native shell", () => {
+    const child = {} as ChildProcess;
+    const spawn = vi.fn(() => child);
+
+    expect(spawnShellCommand("echo ready", { cwd: "C:\\work" }, "win32", spawn)).toBe(child);
+    expect(spawn).toHaveBeenCalledWith(
+      "echo ready",
+      [],
+      { cwd: "C:\\work", shell: true },
+    );
   });
 });
 
