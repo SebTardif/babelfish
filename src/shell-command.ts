@@ -1,10 +1,4 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import {
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,37 +31,23 @@ function spawnWindowsJobCommand(
   options: Omit<SpawnOptions, "shell">,
   spawnProcess: SpawnProcess,
 ): ChildProcess {
-  const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-babelfish-"));
-  const commandFile = path.join(tempDir, "command.cmd");
-  writeFileSync(commandFile, command, "utf8");
-
-  let child: ChildProcess;
-  try {
-    child = spawnProcess(
-      windowsPowerShellPath(),
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        windowsJobScript,
-        "-Mode",
-        mode,
-        "-CommandFile",
-        commandFile,
-      ],
-      { ...options, windowsHide: true },
-    );
-  } catch (error) {
-    rmSync(tempDir, { recursive: true, force: true });
-    throw error;
-  }
-  child.once("close", () => {
-    rmSync(tempDir, { recursive: true, force: true });
-  });
-  return child;
+  return spawnProcess(
+    windowsPowerShellPath(),
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      windowsJobScript,
+      "-Mode",
+      mode,
+      "-CommandBase64",
+      Buffer.from(command, "utf8").toString("base64"),
+    ],
+    { ...options, windowsHide: true },
+  );
 }
 
 export function spawnShellCommand(

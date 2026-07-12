@@ -4,7 +4,7 @@ param(
   [string]$Mode,
 
   [Parameter(Mandatory = $true)]
-  [string]$CommandFile
+  [string]$CommandBase64
 )
 
 $ErrorActionPreference = "Stop"
@@ -110,7 +110,10 @@ public static class BabelfishJob {
 "@
 
 $job = [BabelfishJob]::CreateForCurrentProcess()
-& $env:ComSpec /d /s /c "`"$CommandFile`""
+$command = [Text.Encoding]::UTF8.GetString(
+  [Convert]::FromBase64String($CommandBase64)
+)
+& $env:ComSpec /d /s /c $command
 $commandExitCode = $LASTEXITCODE
 
 if ($Mode -eq "monitor") {

@@ -1,10 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import {
-  existsSync,
-  readFileSync,
-} from "node:fs";
-import {
   spawnMonitorShellCommand,
   spawnShellCommand,
   terminateShellProcessTree,
@@ -37,14 +33,13 @@ describe("spawnShellCommand", () => {
       expect.stringMatching(/windows-job\.ps1$/),
       "-Mode",
       "command",
-      "-CommandFile",
+      "-CommandBase64",
       expect.any(String),
     ]));
     expect(options).toEqual({ cwd: "C:\\work", windowsHide: true });
-    const commandFile = args.at(-1)!;
-    expect(readFileSync(commandFile, "utf8")).toBe("echo ready");
-    child.emit("close", 0);
-    expect(existsSync(commandFile)).toBe(false);
+    expect(Buffer.from(args.at(-1)!, "base64").toString("utf8")).toBe(
+      "echo ready",
+    );
   });
 });
 
@@ -62,10 +57,9 @@ describe("spawnMonitorShellCommand", () => {
     );
     expect(args).toEqual(expect.arrayContaining(["-Mode", "monitor"]));
     expect(options).toEqual({ windowsHide: true });
-    const commandFile = args.at(-1)!;
-    expect(readFileSync(commandFile, "utf8")).toBe("start /b worker.exe");
-    child.emit("close", 0);
-    expect(existsSync(commandFile)).toBe(false);
+    expect(Buffer.from(args.at(-1)!, "base64").toString("utf8")).toBe(
+      "start /b worker.exe",
+    );
   });
 
   it("does not alter POSIX monitor commands", () => {
