@@ -6,8 +6,8 @@ import { SUPPORTED_APPS, type BabelfishConfig, type SupportedApp } from "./confi
 import {
   callBundleMcp,
   callBundleTool,
+  inspectBundleServer,
   listBundlePlugins,
-  listBundleServerTools,
   summarizeBundlePlugin,
   type BundlePlugin,
 } from "./bundle-plugins.js";
@@ -535,7 +535,8 @@ async function buildBundleToolEntries(
   const entries: NativeToolEntry[] = [];
   for (const plugin of plugins) {
     for (const server of plugin.servers) {
-      for (const tool of await listBundleServerTools(plugin, server, timeoutMs)) {
+      const inspection = await inspectBundleServer(plugin, server, timeoutMs);
+      for (const tool of inspection.tools) {
         entries.push({
           kind: "tool",
           app: plugin.app,
@@ -548,32 +549,32 @@ async function buildBundleToolEntries(
         });
       }
       const prefix = `${sanitizeName(plugin.key)}__${sanitizeName(server.name)}`;
-      entries.push(
-        {
+      if (inspection.capabilities.resources) {
+        entries.push({
           kind: "tool", app: plugin.app, name: `${prefix}__resources_list`, plugin: plugin.key,
           server: server.name, originalName: "resources/list", mcpOperation: "listResources",
           description: `List MCP resources from ${plugin.key}/${server.name}`,
           inputSchema: { type: "object", additionalProperties: false, properties: { cursor: { type: "string" } } },
-        },
-        {
+        }, {
           kind: "tool", app: plugin.app, name: `${prefix}__resource_read`, plugin: plugin.key,
           server: server.name, originalName: "resources/read", mcpOperation: "readResource",
           description: `Read an MCP resource from ${plugin.key}/${server.name}`,
           inputSchema: { type: "object", additionalProperties: false, properties: { uri: { type: "string" } }, required: ["uri"] },
-        },
-        {
+        });
+      }
+      if (inspection.capabilities.prompts) {
+        entries.push({
           kind: "tool", app: plugin.app, name: `${prefix}__prompts_list`, plugin: plugin.key,
           server: server.name, originalName: "prompts/list", mcpOperation: "listPrompts",
           description: `List MCP prompts from ${plugin.key}/${server.name}`,
           inputSchema: { type: "object", additionalProperties: false, properties: { cursor: { type: "string" } } },
-        },
-        {
+        }, {
           kind: "tool", app: plugin.app, name: `${prefix}__prompt_get`, plugin: plugin.key,
           server: server.name, originalName: "prompts/get", mcpOperation: "getPrompt",
           description: `Get an MCP prompt from ${plugin.key}/${server.name}`,
           inputSchema: { type: "object", additionalProperties: false, properties: { name: { type: "string" }, arguments: { type: "object", additionalProperties: { type: "string" } } }, required: ["name"] },
-        },
-      );
+        });
+      }
     }
   }
   const counts = new Map<string, number>();

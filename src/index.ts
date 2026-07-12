@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import readline from "node:readline";
 import { resolveConfig } from "./config.js";
 import {
@@ -28,6 +28,10 @@ import {
   type NativeToolContext,
   type NativeToolEntry,
 } from "./native-tools.js";
+import {
+  spawnMonitorShellCommand,
+  terminateShellProcessTree,
+} from "./shell-command.js";
 
 type Logger = { warn(message: string): void };
 type OpenClawCommandContext = {
@@ -172,44 +176,64 @@ function runKey(event: unknown, ctx: unknown): string | undefined {
 }
 
 function stopMonitors(key: string): void {
-  for (const child of monitorProcesses.get(key) ?? []) {
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, "SIGTERM");
-      } catch {
-        child.kill("SIGTERM");
-      }
-    }
-  }
+  const children = monitorProcesses.get(key) ?? [];
   monitorProcesses.delete(key);
   monitorContext.delete(key);
+  for (const child of children) {
+    terminateShellProcessTree(child);
+  }
 }
 
-async function startMonitors(key: string, workspace: string): Promise<void> {
+async function startMonitors(
+  key: string,
+  workspace: string,
+  warn: (message: string) => void,
+): Promise<void> {
   stopMonitors(key);
   const children: ChildProcess[] = [];
-  for (const plugin of await listBundlePlugins(config, "claude-code")) {
+  monitorProcesses.set(key, children);
+  const plugins = await listBundlePlugins(config, "claude-code");
+  if (monitorProcesses.get(key) !== children) return;
+  for (const plugin of plugins) {
     for (const monitor of plugin.monitors) {
       const command = monitor.command.replaceAll("${CLAUDE_PROJECT_DIR}", workspace);
-      const child = spawn("/bin/sh", ["-lc", command], {
+      const child = spawnMonitorShellCommand(command, {
         cwd: workspace,
         detached: true,
         env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin.path, PLUGIN_ROOT: plugin.path },
         stdio: ["ignore", "pipe", "inherit"],
+        windowsHide: true,
+      });
+      child.once("error", (error) => {
+        warn(`Babelfish monitor ${plugin.key}/${monitor.name} failed to start: ${error.message}`);
       });
       children.push(child);
-      const lines = readline.createInterface({ input: child.stdout! });
+      child.once("close", () => {
+        if (process.platform !== "win32") return;
+        const active = monitorProcesses.get(key);
+        if (active !== children) return;
+        const index = active.indexOf(child);
+        if (index >= 0) active.splice(index, 1);
+        if (active.length === 0) monitorProcesses.delete(key);
+      });
+      if (!child.stdout) {
+        warn(`Babelfish monitor ${plugin.key}/${monitor.name} has no stdout stream.`);
+        child.kill();
+        continue;
+      }
+      const lines = readline.createInterface({ input: child.stdout });
       lines.on("line", (line) => {
         const text = line.trim();
         if (!text) return;
+        if (!monitorProcesses.get(key)?.includes(child)) return;
         const pending = monitorContext.get(key) ?? [];
         pending.push(`${monitor.description}: ${text}`);
         monitorContext.set(key, pending.slice(-50));
       });
     }
   }
-  if (children.length > 0) {
-    monitorProcesses.set(key, children);
+  if (children.length === 0) {
+    monitorProcesses.delete(key);
   }
 }
 
@@ -649,7 +673,11 @@ function registerSessionHooks(api: OpenClawApi): void {
         sessionStartContext.set(key, additional);
       }
       if (key) {
-        await startMonitors(key, context(ctx).workspace ?? process.cwd());
+        await startMonitors(
+          key,
+          context(ctx).workspace ?? process.cwd(),
+          (message) => api.logger?.warn(message),
+        );
       }
     })();
     if (key) {

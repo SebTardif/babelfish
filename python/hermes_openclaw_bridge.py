@@ -433,13 +433,25 @@ def _list(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _plugin_matches(plugin_dir: Path, wanted_plugin: Any) -> bool:
+def _matching_plugin_dirs(install_dir: Path, wanted_plugin: Any) -> list[Path]:
+    plugin_dirs = _plugin_dirs(install_dir)
     if not wanted_plugin:
-        return True
-    if wanted_plugin in {plugin_dir.name}:
-        return True
-    manifest = _load_yaml(plugin_dir / "plugin.yaml")
-    return wanted_plugin in {manifest.get("name"), manifest.get("key")}
+        return plugin_dirs
+
+    selector = str(wanted_plugin)
+    exact = [plugin_dir for plugin_dir in plugin_dirs if plugin_dir.name == selector]
+    if exact:
+        return exact
+
+    aliases = []
+    for plugin_dir in plugin_dirs:
+        manifest = _load_yaml(plugin_dir / "plugin.yaml")
+        if selector in {manifest.get("name"), manifest.get("key")}:
+            aliases.append(plugin_dir)
+    if len(aliases) > 1:
+        names = ", ".join(plugin_dir.name for plugin_dir in aliases)
+        raise RuntimeError(f"Plugin selector '{selector}' is ambiguous. Matches: {names}")
+    return aliases
 
 
 def _invoke(handler: Callable[..., Any], arg: Any) -> Any:
@@ -515,9 +527,8 @@ def _call(payload: dict[str, Any]) -> dict[str, Any]:
     wanted_tool = str(payload["tool"])
     matches: list[tuple[Path, ToolRecord]] = []
 
-    for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
-        if not _plugin_matches(plugin_dir, wanted_plugin):
-            continue
+    install_dir = Path(str(payload["installDir"])).expanduser().resolve()
+    for plugin_dir in _matching_plugin_dirs(install_dir, wanted_plugin):
         _manifest, ctx = _load_plugin(plugin_dir)
         for tool in ctx.tools:
             if tool.name == wanted_tool:
@@ -556,9 +567,8 @@ def _command(payload: dict[str, Any]) -> dict[str, Any]:
     wanted_command = str(payload["command"]).lstrip("/")
     matches: list[tuple[Path, CommandRecord]] = []
 
-    for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
-        if not _plugin_matches(plugin_dir, wanted_plugin):
-            continue
+    install_dir = Path(str(payload["installDir"])).expanduser().resolve()
+    for plugin_dir in _matching_plugin_dirs(install_dir, wanted_plugin):
         _manifest, ctx = _load_plugin(plugin_dir)
         for command in ctx.commands:
             if command.name == wanted_command:
@@ -590,9 +600,8 @@ def _cli_command(payload: dict[str, Any]) -> dict[str, Any]:
     wanted_command = str(payload["command"]).lstrip("/")
     matches: list[tuple[Path, CliCommandRecord]] = []
 
-    for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
-        if not _plugin_matches(plugin_dir, wanted_plugin):
-            continue
+    install_dir = Path(str(payload["installDir"])).expanduser().resolve()
+    for plugin_dir in _matching_plugin_dirs(install_dir, wanted_plugin):
         _manifest, ctx = _load_plugin(plugin_dir)
         for command in ctx.cli_commands:
             if command.name == wanted_command:
@@ -645,9 +654,8 @@ def _skill(payload: dict[str, Any]) -> dict[str, Any]:
     wanted_skill = str(payload["skill"])
     matches: list[tuple[Path, SkillRecord]] = []
 
-    for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
-        if not _plugin_matches(plugin_dir, wanted_plugin):
-            continue
+    install_dir = Path(str(payload["installDir"])).expanduser().resolve()
+    for plugin_dir in _matching_plugin_dirs(install_dir, wanted_plugin):
         _manifest, ctx = _load_plugin(plugin_dir)
         for skill in ctx.skills:
             if skill.name == wanted_skill:

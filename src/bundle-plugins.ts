@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -7,6 +6,10 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { BabelfishConfig, SupportedApp } from "./config.js";
 import { appInstallDir } from "./config.js";
+import {
+  spawnShellCommand,
+  terminateShellProcessTree,
+} from "./shell-command.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -602,24 +605,40 @@ async function clientFor(plugin: BundlePlugin, server: BundleServer, timeoutMs: 
   return client;
 }
 
-export async function listBundleServerTools(
+export async function inspectBundleServer(
   plugin: BundlePlugin,
   server: BundleServer,
   timeoutMs: number,
 ) {
   const client = await clientFor(plugin, server, timeoutMs);
   try {
+    const advertised = client.getServerCapabilities();
+    const capabilities = {
+      tools: Boolean(advertised?.tools),
+      resources: Boolean(advertised?.resources),
+      prompts: Boolean(advertised?.prompts),
+    };
     const tools = [];
-    let cursor: string | undefined;
-    do {
-      const page = await client.listTools(cursor ? { cursor } : undefined, { timeout: timeoutMs });
-      tools.push(...page.tools);
-      cursor = typeof page.nextCursor === "string" ? page.nextCursor : undefined;
-    } while (cursor);
-    return tools;
+    if (capabilities.tools) {
+      let cursor: string | undefined;
+      do {
+        const page = await client.listTools(cursor ? { cursor } : undefined, { timeout: timeoutMs });
+        tools.push(...page.tools);
+        cursor = typeof page.nextCursor === "string" ? page.nextCursor : undefined;
+      } while (cursor);
+    }
+    return { capabilities, tools };
   } finally {
     await client.close();
   }
+}
+
+export async function listBundleServerTools(
+  plugin: BundlePlugin,
+  server: BundleServer,
+  timeoutMs: number,
+) {
+  return (await inspectBundleServer(plugin, server, timeoutMs)).tools;
 }
 
 export async function callBundleTool(
@@ -774,10 +793,12 @@ function runHookCommand(
   timeoutMs: number,
 ): Promise<{ stdout: string; blocked?: boolean; blockReason?: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("/bin/sh", ["-lc", command], {
+    const child = spawnShellCommand(command, {
       cwd,
+      detached: true,
       env: { ...process.env, CLAUDE_PLUGIN_ROOT: cwd, PLUGIN_ROOT: cwd },
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -794,12 +815,14 @@ function runHookCommand(
       error ? reject(error) : resolve(result ?? { stdout: "" });
     };
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 250).unref();
+      terminateShellProcessTree(child);
+      setTimeout(() => {
+        terminateShellProcessTree(child, process.platform, "SIGKILL");
+      }, 250).unref();
       finish(new Error(`Hook timed out after ${timeoutMs}ms`));
     }, timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stdout!.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr!.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("error", (error) => finish(error));
     child.on("close", (code) => {
       if (code === 0) {
@@ -814,6 +837,6 @@ function runHookCommand(
         finish(new Error(Buffer.concat(stderr).toString("utf8") || `Hook exited with ${code}`));
       }
     });
-    child.stdin.end(JSON.stringify(payload));
+    child.stdin!.end(JSON.stringify(payload));
   });
 }

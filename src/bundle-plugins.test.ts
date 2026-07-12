@@ -243,12 +243,22 @@ describe("bundle plugins", () => {
     const pluginRoot = path.join(rootDir, "codex", "fixture");
     await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
     await fs.writeFile(
+      path.join(pluginRoot, "pre-block.mjs"),
+      "console.error('blocked'); process.exit(2);",
+    );
+    await fs.writeFile(path.join(pluginRoot, "stop-block.mjs"), "process.exit(2);");
+    await fs.writeFile(
+      path.join(pluginRoot, "diagnostic.mjs"),
+      "console.log('diagnostic');",
+    );
+    await fs.writeFile(path.join(pluginRoot, "fail.mjs"), "process.exit(1);");
+    await fs.writeFile(
       path.join(pluginRoot, ".codex-plugin", "plugin.json"),
       JSON.stringify({ hooks: {
-        PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "printf blocked >&2; exit 2" }] }],
-        Stop: [{ hooks: [{ type: "command", command: "exit 2" }] }],
-        SessionStart: [{ hooks: [{ type: "command", command: "printf diagnostic" }] }],
-        SessionEnd: [{ hooks: [{ type: "command", command: "exit 1" }] }],
+        PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "node pre-block.mjs" }] }],
+        Stop: [{ hooks: [{ type: "command", command: "node stop-block.mjs" }] }],
+        SessionStart: [{ hooks: [{ type: "command", command: "node diagnostic.mjs" }] }],
+        SessionEnd: [{ hooks: [{ type: "command", command: "node fail.mjs" }] }],
       } }),
     );
     const config = { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: 1000, env: {} };

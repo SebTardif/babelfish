@@ -1,10 +1,11 @@
+import path from "node:path";
 import { resolveConfig } from "./config.js";
 
 describe("resolveConfig", () => {
   it("defaults to python3 and a usable install dir", () => {
     const config = resolveConfig(undefined);
     expect(config.python).toBe("python3");
-    expect(config.installDir).toContain("babelfish/hermes");
+    expect(config.installDir).toContain(path.join("babelfish", "hermes"));
     expect(config.rootDir).toContain("babelfish");
     expect(config.timeoutMs).toBe(120000);
   });

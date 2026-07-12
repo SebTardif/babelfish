@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import {
   installHermesPlugin,
   installPlugin,
+  repoNameFromSource,
   sanitizePluginName,
   uninstallHermesPlugin,
 } from "./git-install.js";
@@ -19,6 +20,13 @@ describe("sanitizePluginName", () => {
 
   it("rejects traversal", () => {
     expect(() => sanitizePluginName("../bad")).toThrow(/letters/);
+  });
+});
+
+describe("repoNameFromSource", () => {
+  it("derives names from URLs and Windows paths", () => {
+    expect(repoNameFromSource("https://github.com/example/plugin.git")).toBe("plugin");
+    expect(repoNameFromSource("C:\\plugins\\plugin.git")).toBe("plugin");
   });
 });
 
