@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import readline from "node:readline";
 import { resolveConfig } from "./config.js";
 import {
@@ -28,6 +28,7 @@ import {
   type NativeToolContext,
   type NativeToolEntry,
 } from "./native-tools.js";
+import { spawnShellCommand } from "./shell-command.js";
 
 type Logger = { warn(message: string): void };
 type OpenClawCommandContext = {
@@ -185,20 +186,32 @@ function stopMonitors(key: string): void {
   monitorContext.delete(key);
 }
 
-async function startMonitors(key: string, workspace: string): Promise<void> {
+async function startMonitors(
+  key: string,
+  workspace: string,
+  warn: (message: string) => void,
+): Promise<void> {
   stopMonitors(key);
   const children: ChildProcess[] = [];
   for (const plugin of await listBundlePlugins(config, "claude-code")) {
     for (const monitor of plugin.monitors) {
       const command = monitor.command.replaceAll("${CLAUDE_PROJECT_DIR}", workspace);
-      const child = spawn("/bin/sh", ["-lc", command], {
+      const child = spawnShellCommand(command, {
         cwd: workspace,
         detached: true,
         env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin.path, PLUGIN_ROOT: plugin.path },
         stdio: ["ignore", "pipe", "inherit"],
       });
+      child.once("error", (error) => {
+        warn(`Babelfish monitor ${plugin.key}/${monitor.name} failed to start: ${error.message}`);
+      });
       children.push(child);
-      const lines = readline.createInterface({ input: child.stdout! });
+      if (!child.stdout) {
+        warn(`Babelfish monitor ${plugin.key}/${monitor.name} has no stdout stream.`);
+        child.kill();
+        continue;
+      }
+      const lines = readline.createInterface({ input: child.stdout });
       lines.on("line", (line) => {
         const text = line.trim();
         if (!text) return;
@@ -649,7 +662,11 @@ function registerSessionHooks(api: OpenClawApi): void {
         sessionStartContext.set(key, additional);
       }
       if (key) {
-        await startMonitors(key, context(ctx).workspace ?? process.cwd());
+        await startMonitors(
+          key,
+          context(ctx).workspace ?? process.cwd(),
+          (message) => api.logger?.warn(message),
+        );
       }
     })();
     if (key) {

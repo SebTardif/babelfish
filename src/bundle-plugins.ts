@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -7,6 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { BabelfishConfig, SupportedApp } from "./config.js";
 import { appInstallDir } from "./config.js";
+import { spawnShellCommand } from "./shell-command.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -774,7 +774,7 @@ function runHookCommand(
   timeoutMs: number,
 ): Promise<{ stdout: string; blocked?: boolean; blockReason?: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("/bin/sh", ["-lc", command], {
+    const child = spawnShellCommand(command, {
       cwd,
       env: { ...process.env, CLAUDE_PLUGIN_ROOT: cwd, PLUGIN_ROOT: cwd },
       stdio: ["pipe", "pipe", "pipe"],
@@ -798,8 +798,8 @@ function runHookCommand(
       setTimeout(() => child.kill("SIGKILL"), 250).unref();
       finish(new Error(`Hook timed out after ${timeoutMs}ms`));
     }, timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stdout!.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr!.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("error", (error) => finish(error));
     child.on("close", (code) => {
       if (code === 0) {
@@ -814,6 +814,6 @@ function runHookCommand(
         finish(new Error(Buffer.concat(stderr).toString("utf8") || `Hook exited with ${code}`));
       }
     });
-    child.stdin.end(JSON.stringify(payload));
+    child.stdin!.end(JSON.stringify(payload));
   });
 }

@@ -108,6 +108,22 @@ describe("native OpenClaw hook entry", () => {
       ).resolves.toEqual({ prependContext: "fixture context\n\nStatus: ready" });
       await hooks.get("session_end")?.({ sessionId: "monitor-session" }, { sessionId: "monitor-session" });
 
+      await hooks.get("session_start")?.(
+        { sessionId: "broken-monitor-session" },
+        {
+          sessionId: "broken-monitor-session",
+          workspaceDir: path.join(bundleRoot, "missing-workspace"),
+        },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(api.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("monitor-plugin/status failed to start"),
+      );
+      await hooks.get("session_end")?.(
+        { sessionId: "broken-monitor-session" },
+        { sessionId: "broken-monitor-session" },
+      );
+
       await expect(
         hooks.get("before_agent_run")?.({ prompt: "deny" }, { runId: "run-blocked" }),
       ).resolves.toEqual({ outcome: "block", reason: "denied", message: "denied" });
