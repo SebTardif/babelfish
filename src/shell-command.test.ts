@@ -1,5 +1,8 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   spawnMonitorShellCommand,
   spawnShellCommand,
@@ -90,6 +93,23 @@ describe("spawnMonitorShellCommand", () => {
       {},
     );
   });
+
+  it("retires a monitor supervisor after its command tree drains", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-monitor-"));
+    await fs.writeFile(path.join(root, "monitor.mjs"), "console.log('ready');");
+    const child = spawnMonitorShellCommand("node monitor.mjs", {
+      cwd: root,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    child.stdout!.on("data", (chunk: Buffer) => stdout.push(chunk));
+
+    const [code] = await once(child, "close");
+
+    expect(code).toBe(0);
+    expect(Buffer.concat(stdout).toString("utf8").trim()).toBe("ready");
+  }, 15_000);
 });
 
 describe("terminateShellProcessTree", () => {

@@ -110,10 +110,11 @@ describe("native OpenClaw hook entry", () => {
       ).resolves.toEqual({ prependContext: "fixture context\n\nAnswer briefly." });
 
       await hooks.get("session_start")?.({ sessionId: "monitor-session" }, { sessionId: "monitor-session" });
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      await expect(
-        hooks.get("agent_turn_prepare")?.({}, { sessionId: "monitor-session" }),
-      ).resolves.toEqual({ prependContext: "fixture context\n\nStatus: ready" });
+      await vi.waitFor(async () => {
+        await expect(
+          hooks.get("agent_turn_prepare")?.({}, { sessionId: "monitor-session" }),
+        ).resolves.toEqual({ prependContext: "fixture context\n\nStatus: ready" });
+      }, { timeout: 5000 });
       const monitorPid = process.platform === "win32"
         ? undefined
         : Number((await fs.readFile(monitorPidPath, "utf8")).trim());
