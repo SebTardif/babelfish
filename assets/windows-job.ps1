@@ -20,6 +20,7 @@ using Microsoft.Win32.SafeHandles;
 
 public static class BabelfishJob {
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+    private const int JobObjectBasicAccountingInformation = 1;
     private const int JobObjectExtendedLimitInformation = 9;
     private const uint CREATE_SUSPENDED = 0x00000004;
     private const uint CREATE_NO_WINDOW = 0x08000000;
@@ -38,6 +39,18 @@ public static class BabelfishJob {
         public UIntPtr Affinity;
         public uint PriorityClass;
         public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION {
+        public long TotalUserTime;
+        public long TotalKernelTime;
+        public long ThisPeriodTotalUserTime;
+        public long ThisPeriodTotalKernelTime;
+        public uint TotalPageFaultCount;
+        public uint TotalProcesses;
+        public uint ActiveProcesses;
+        public uint TotalTerminatedProcesses;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -99,6 +112,15 @@ public static class BabelfishJob {
         int informationClass,
         IntPtr information,
         uint informationLength
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool QueryInformationJobObject(
+        IntPtr job,
+        int informationClass,
+        IntPtr information,
+        uint informationLength,
+        IntPtr returnLength
     );
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -177,6 +199,30 @@ public static class BabelfishJob {
             Marshal.FreeHGlobal(information);
         }
         return job;
+    }
+
+    private static uint ActiveProcessCount(IntPtr job) {
+        int size = Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+        IntPtr information = Marshal.AllocHGlobal(size);
+        try {
+            if (!QueryInformationJobObject(
+                job,
+                JobObjectBasicAccountingInformation,
+                information,
+                (uint)size,
+                IntPtr.Zero
+            )) {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            var accounting =
+                (JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)Marshal.PtrToStructure(
+                    information,
+                    typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)
+                );
+            return accounting.ActiveProcesses;
+        } finally {
+            Marshal.FreeHGlobal(information);
+        }
     }
 
     private static void SetInheritable(IntPtr handle, bool inheritable) {
@@ -350,7 +396,13 @@ public static class BabelfishJob {
         CloseHandle(child.hProcess);
 
         if (mode == "monitor") {
-            Thread.Sleep(Timeout.Infinite);
+            while (ActiveProcessCount(job) > 0) {
+                Thread.Sleep(100);
+            }
+            stdoutPump.Join();
+            stderrPump.Join();
+            CloseHandle(job);
+            return unchecked((int)exitCode);
         }
 
         if (!TerminateJobObject(job, exitCode)) {
