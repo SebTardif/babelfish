@@ -21,6 +21,34 @@ async function copyRelativeFixture(target: string): Promise<void> {
   await fs.cp(fixture, path.join(target, "relative"), { recursive: true });
 }
 
+async function writeRoutingFixture(
+  installDir: string,
+  key: string,
+  manifestName: string,
+  marker: string,
+): Promise<void> {
+  const pluginDir = path.join(installDir, key);
+  await fs.mkdir(pluginDir, { recursive: true });
+  await fs.writeFile(path.join(pluginDir, "plugin.yaml"), `name: ${manifestName}\n`);
+  await fs.writeFile(path.join(pluginDir, "skill.md"), marker);
+  await fs.writeFile(
+    path.join(pluginDir, "__init__.py"),
+    [
+      "from pathlib import Path",
+      "",
+      "def _setup(parser):",
+      "    pass",
+      "",
+      "def register(ctx):",
+      `    ctx.register_tool(name="shared", toolset="test", schema={"name": "shared", "parameters": {"type": "object"}}, handler=lambda args: {"marker": "${marker}"})`,
+      `    ctx.register_command("shared", lambda raw: {"marker": "${marker}"}, "Shared command")`,
+      `    ctx.register_cli_command("sharedcli", "Shared CLI", _setup, lambda args: {"marker": "${marker}"}, "Shared CLI")`,
+      `    ctx.register_skill("shared_skill", Path("skill.md"), "${marker}")`,
+      "",
+    ].join("\n"),
+  );
+}
+
 describe("Hermes Python bridge", () => {
   it("lists and calls a Hermes register(ctx) tool", async () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-"));
@@ -222,5 +250,36 @@ describe("Hermes Python bridge", () => {
       "first",
       "second",
     ]);
+  });
+
+  it("prefers an exact installed key over another plugin's manifest alias", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-"));
+    await writeRoutingFixture(installDir, "a-alias", "real", "alias");
+    await writeRoutingFixture(installDir, "real", "actual", "exact");
+    const config = { installDir, python: "python3", timeoutMs: 10000, env: {} };
+
+    await expect(
+      callHermesTool(config, { plugin: "real", tool: "shared", args: {} }),
+    ).resolves.toMatchObject({ plugin: "real", result: { marker: "exact" } });
+    await expect(
+      callHermesCommand(config, { plugin: "real", command: "shared", args: "" }),
+    ).resolves.toMatchObject({ plugin: "real", result: { marker: "exact" } });
+    await expect(
+      callHermesCliCommand(config, { plugin: "real", command: "sharedcli", args: [] }),
+    ).resolves.toMatchObject({ plugin: "real", result: { marker: "exact" } });
+    await expect(
+      readHermesSkill(config, { plugin: "real", skill: "shared_skill" }),
+    ).resolves.toMatchObject({ plugin: "real", text: "exact" });
+  });
+
+  it("rejects an ambiguous manifest alias", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-"));
+    await writeRoutingFixture(installDir, "first", "shared-alias", "first");
+    await writeRoutingFixture(installDir, "second", "shared-alias", "second");
+    const config = { installDir, python: "python3", timeoutMs: 10000, env: {} };
+
+    await expect(
+      callHermesTool(config, { plugin: "shared-alias", tool: "shared", args: {} }),
+    ).rejects.toThrow("Plugin selector 'shared-alias' is ambiguous");
   });
 });
