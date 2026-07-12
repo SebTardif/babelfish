@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import {
+  existsSync,
+  readFileSync,
+} from "node:fs";
+import {
   spawnMonitorShellCommand,
   spawnShellCommand,
   terminateShellProcessTree,
@@ -20,31 +24,48 @@ describe("spawnShellCommand", () => {
   });
 
   it("delegates Windows command parsing to the native shell", () => {
-    const child = {} as ChildProcess;
+    const child = new EventEmitter() as ChildProcess;
     const spawn = vi.fn(() => child);
 
     expect(spawnShellCommand("echo ready", { cwd: "C:\\work" }, "win32", spawn)).toBe(child);
-    expect(spawn).toHaveBeenCalledWith(
-      "echo ready",
-      [],
-      { cwd: "C:\\work", shell: true },
+    const [executable, args, options] = spawn.mock.calls[0]!;
+    expect(executable).toBe(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     );
+    expect(args).toEqual(expect.arrayContaining([
+      "-File",
+      expect.stringMatching(/windows-job\.ps1$/),
+      "-Mode",
+      "command",
+      "-CommandFile",
+      expect.any(String),
+    ]));
+    expect(options).toEqual({ cwd: "C:\\work", windowsHide: true });
+    const commandFile = args.at(-1)!;
+    expect(readFileSync(commandFile, "utf8")).toBe("echo ready");
+    child.emit("close", 0);
+    expect(existsSync(commandFile)).toBe(false);
   });
 });
 
 describe("spawnMonitorShellCommand", () => {
-  it("keeps the Windows shell alive as a durable process-tree root", () => {
-    const child = {} as ChildProcess;
+  it("uses a Windows Job Object supervisor as a durable process-tree root", () => {
+    const child = new EventEmitter() as ChildProcess;
     const spawn = vi.fn(() => child);
 
     expect(
       spawnMonitorShellCommand("start /b worker.exe", {}, "win32", spawn),
     ).toBe(child);
-    expect(spawn).toHaveBeenCalledWith(
-      "start /b worker.exe\r\nping.exe -t 127.0.0.1 >NUL",
-      [],
-      { shell: true },
+    const [executable, args, options] = spawn.mock.calls[0]!;
+    expect(executable).toBe(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     );
+    expect(args).toEqual(expect.arrayContaining(["-Mode", "monitor"]));
+    expect(options).toEqual({ windowsHide: true });
+    const commandFile = args.at(-1)!;
+    expect(readFileSync(commandFile, "utf8")).toBe("start /b worker.exe");
+    child.emit("close", 0);
+    expect(existsSync(commandFile)).toBe(false);
   });
 
   it("does not alter POSIX monitor commands", () => {
@@ -66,40 +87,21 @@ describe("terminateShellProcessTree", () => {
     const child = { pid: 42, kill: vi.fn() } as unknown as ChildProcess;
     const killProcess = vi.fn();
 
-    terminateShellProcessTree(child, "linux", "SIGTERM", vi.fn(), killProcess);
+    terminateShellProcessTree(child, "linux", "SIGTERM", killProcess);
 
     expect(killProcess).toHaveBeenCalledWith(-42, "SIGTERM");
     expect(child.kill).not.toHaveBeenCalled();
   });
 
-  it("uses taskkill to terminate Windows process trees", () => {
-    const child = { pid: 42, kill: vi.fn() } as unknown as ChildProcess;
-    const killer = new EventEmitter() as ChildProcess;
-    const spawnBinary = vi.fn(() => killer);
+  it("terminates the Windows Job Object supervisor", () => {
+    const child = {
+      pid: 42,
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(),
+    } as unknown as ChildProcess;
 
-    terminateShellProcessTree(child, "win32", "SIGTERM", spawnBinary, vi.fn());
-
-    expect(spawnBinary).toHaveBeenCalledWith(
-      "taskkill",
-      ["/pid", "42", "/t", "/f"],
-      { stdio: "ignore", windowsHide: true },
-    );
-    killer.emit("exit", 0);
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("falls back when taskkill cannot start", () => {
-    const child = { pid: 42, kill: vi.fn() } as unknown as ChildProcess;
-    const killer = new EventEmitter() as ChildProcess;
-
-    terminateShellProcessTree(
-      child,
-      "win32",
-      "SIGTERM",
-      vi.fn(() => killer),
-      vi.fn(),
-    );
-    killer.emit("error", new Error("missing taskkill"));
+    terminateShellProcessTree(child, "win32");
 
     expect(child.kill).toHaveBeenCalledOnce();
   });
@@ -111,12 +113,10 @@ describe("terminateShellProcessTree", () => {
       signalCode: null,
       kill: vi.fn(),
     } as unknown as ChildProcess;
-    const spawnBinary = vi.fn();
     const killProcess = vi.fn();
 
-    terminateShellProcessTree(child, "win32", "SIGTERM", spawnBinary, killProcess);
+    terminateShellProcessTree(child, "win32", "SIGTERM", killProcess);
 
-    expect(spawnBinary).not.toHaveBeenCalled();
     expect(killProcess).not.toHaveBeenCalled();
     expect(child.kill).not.toHaveBeenCalled();
   });
@@ -130,7 +130,7 @@ describe("terminateShellProcessTree", () => {
     } as unknown as ChildProcess;
     const killProcess = vi.fn();
 
-    terminateShellProcessTree(child, "linux", "SIGTERM", vi.fn(), killProcess);
+    terminateShellProcessTree(child, "linux", "SIGTERM", killProcess);
 
     expect(killProcess).toHaveBeenCalledWith(-42, "SIGTERM");
     expect(child.kill).not.toHaveBeenCalled();
