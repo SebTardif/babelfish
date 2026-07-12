@@ -51,10 +51,10 @@ public static class BabelfishJob {
         public UIntPtr PeakJobMemoryUsed;
     }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateJobObject(IntPtr securityAttributes, string name);
 
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetInformationJobObject(
         IntPtr job,
         int informationClass,
@@ -62,13 +62,13 @@ public static class BabelfishJob {
         uint informationLength
     );
 
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetCurrentProcess();
 
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
 
     public static IntPtr CreateForCurrentProcess() {
