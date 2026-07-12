@@ -207,6 +207,13 @@ async function startMonitors(
         warn(`Babelfish monitor ${plugin.key}/${monitor.name} failed to start: ${error.message}`);
       });
       children.push(child);
+      child.once("close", () => {
+        const active = monitorProcesses.get(key);
+        if (active !== children) return;
+        const index = active.indexOf(child);
+        if (index >= 0) active.splice(index, 1);
+        if (active.length === 0) monitorProcesses.delete(key);
+      });
       if (!child.stdout) {
         warn(`Babelfish monitor ${plugin.key}/${monitor.name} has no stdout stream.`);
         child.kill();

@@ -36,7 +36,7 @@ describe("terminateShellProcessTree", () => {
     const child = { pid: 42, kill: vi.fn() } as unknown as ChildProcess;
     const killProcess = vi.fn();
 
-    terminateShellProcessTree(child, "linux", vi.fn(), killProcess);
+    terminateShellProcessTree(child, "linux", "SIGTERM", vi.fn(), killProcess);
 
     expect(killProcess).toHaveBeenCalledWith(-42, "SIGTERM");
     expect(child.kill).not.toHaveBeenCalled();
@@ -47,7 +47,7 @@ describe("terminateShellProcessTree", () => {
     const killer = new EventEmitter() as ChildProcess;
     const spawnBinary = vi.fn(() => killer);
 
-    terminateShellProcessTree(child, "win32", spawnBinary, vi.fn());
+    terminateShellProcessTree(child, "win32", "SIGTERM", spawnBinary, vi.fn());
 
     expect(spawnBinary).toHaveBeenCalledWith(
       "taskkill",
@@ -62,9 +62,32 @@ describe("terminateShellProcessTree", () => {
     const child = { pid: 42, kill: vi.fn() } as unknown as ChildProcess;
     const killer = new EventEmitter() as ChildProcess;
 
-    terminateShellProcessTree(child, "win32", vi.fn(() => killer), vi.fn());
+    terminateShellProcessTree(
+      child,
+      "win32",
+      "SIGTERM",
+      vi.fn(() => killer),
+      vi.fn(),
+    );
     killer.emit("error", new Error("missing taskkill"));
 
     expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  it("does not target an exited child's stale PID", () => {
+    const child = {
+      pid: 42,
+      exitCode: 0,
+      signalCode: null,
+      kill: vi.fn(),
+    } as unknown as ChildProcess;
+    const spawnBinary = vi.fn();
+    const killProcess = vi.fn();
+
+    terminateShellProcessTree(child, "win32", "SIGTERM", spawnBinary, killProcess);
+
+    expect(spawnBinary).not.toHaveBeenCalled();
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
   });
 });

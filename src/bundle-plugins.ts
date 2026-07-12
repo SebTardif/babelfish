@@ -6,7 +6,10 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { BabelfishConfig, SupportedApp } from "./config.js";
 import { appInstallDir } from "./config.js";
-import { spawnShellCommand } from "./shell-command.js";
+import {
+  spawnShellCommand,
+  terminateShellProcessTree,
+} from "./shell-command.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -810,8 +813,10 @@ function runHookCommand(
       error ? reject(error) : resolve(result ?? { stdout: "" });
     };
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 250).unref();
+      terminateShellProcessTree(child);
+      setTimeout(() => {
+        terminateShellProcessTree(child, process.platform, "SIGKILL");
+      }, 250).unref();
       finish(new Error(`Hook timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     child.stdout!.on("data", (chunk: Buffer) => stdout.push(chunk));

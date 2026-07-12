@@ -21,10 +21,11 @@ export function spawnShellCommand(
 export function terminateShellProcessTree(
   child: ChildProcess,
   platform: NodeJS.Platform = process.platform,
+  signal: NodeJS.Signals = "SIGTERM",
   spawnBinary: SpawnProcess = spawn,
   killProcess: typeof process.kill = process.kill,
 ): void {
-  if (!child.pid) return;
+  if (!child.pid || child.exitCode != null || child.signalCode != null) return;
 
   if (platform === "win32") {
     let fellBack = false;
@@ -46,8 +47,8 @@ export function terminateShellProcessTree(
   }
 
   try {
-    killProcess(-child.pid, "SIGTERM");
+    killProcess(-child.pid, signal);
   } catch {
-    child.kill("SIGTERM");
+    child.kill(signal);
   }
 }
