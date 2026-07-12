@@ -27,6 +27,8 @@ public static class BabelfishJob {
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint INFINITE = 0xffffffff;
     private const uint HANDLE_FLAG_INHERIT = 0x00000001;
+    private static readonly UIntPtr PROC_THREAD_ATTRIBUTE_HANDLE_LIST =
+        new UIntPtr(0x00020002);
     private static readonly UIntPtr PROC_THREAD_ATTRIBUTE_JOB_LIST =
         new UIntPtr(0x0002000D);
 
@@ -350,7 +352,7 @@ public static class BabelfishJob {
         IntPtr attributeListSize = IntPtr.Zero;
         InitializeProcThreadAttributeList(
             IntPtr.Zero,
-            1,
+            2,
             0,
             ref attributeListSize
         );
@@ -359,18 +361,33 @@ public static class BabelfishJob {
         }
 
         startup.lpAttributeList = Marshal.AllocHGlobal(attributeListSize);
+        IntPtr handleList = Marshal.AllocHGlobal(IntPtr.Size * 3);
         IntPtr jobList = Marshal.AllocHGlobal(IntPtr.Size);
         bool initialized = false;
         try {
             if (!InitializeProcThreadAttributeList(
                 startup.lpAttributeList,
-                1,
+                2,
                 0,
                 ref attributeListSize
             )) {
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
             initialized = true;
+            Marshal.WriteIntPtr(handleList, 0, childStdin);
+            Marshal.WriteIntPtr(handleList, IntPtr.Size, childStdout);
+            Marshal.WriteIntPtr(handleList, IntPtr.Size * 2, childStderr);
+            if (!UpdateProcThreadAttribute(
+                startup.lpAttributeList,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                handleList,
+                new UIntPtr((uint)(IntPtr.Size * 3)),
+                IntPtr.Zero,
+                IntPtr.Zero
+            )) {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
             Marshal.WriteIntPtr(jobList, job);
             if (!UpdateProcThreadAttribute(
                 startup.lpAttributeList,
@@ -405,6 +422,7 @@ public static class BabelfishJob {
                 DeleteProcThreadAttributeList(startup.lpAttributeList);
             }
             Marshal.FreeHGlobal(startup.lpAttributeList);
+            Marshal.FreeHGlobal(handleList);
             Marshal.FreeHGlobal(jobList);
         }
     }
@@ -495,4 +513,12 @@ public static class BabelfishJob {
 $command = [Text.Encoding]::UTF8.GetString(
   [Convert]::FromBase64String($CommandBase64)
 )
-exit [BabelfishJob]::Run($command, $Mode, $env:ComSpec)
+$systemRoot = if (
+  $env:SystemRoot -and [IO.Path]::IsPathRooted($env:SystemRoot)
+) {
+  $env:SystemRoot
+} else {
+  "C:\Windows"
+}
+$commandShell = Join-Path $systemRoot "System32\cmd.exe"
+exit [BabelfishJob]::Run($command, $Mode, $commandShell)
