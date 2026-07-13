@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 22.19.0
+          - os: macos-latest
+            node: 22.19.0
+          - os: windows-latest
+            node: 22.19.0
+          - os: ubuntu-latest
+            node: 24
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          cache: npm
+          node-version: ${{ matrix.node }}
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+
+      - name: Provide python3 command on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $shim = Join-Path $env:RUNNER_TEMP "python3-shim"
+          New-Item -ItemType Directory -Force -Path $shim | Out-Null
+          "@echo off`npython %*" | Set-Content -Path (Join-Path $shim "python3.cmd")
+          $shim | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run checks
+        run: npm run check
+
+      - name: Verify package contents
+        run: npm run pack:check

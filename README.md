@@ -212,3 +212,13 @@ npm run check
 
 The test suite covers source-runtime tools, commands, skills, hook translation,
 bundle discovery, transactional install/uninstall, and the optional MCP server.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, compatibility
+requirements, and pull request guidance. Report security vulnerabilities
+privately according to [SECURITY.md](SECURITY.md).
+
+## License
+
+Babelfish is available under the [MIT License](LICENSE).

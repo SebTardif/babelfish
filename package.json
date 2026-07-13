@@ -4,7 +4,14 @@
   "description": "Use plugins from supported coding and agent apps in OpenClaw",
   "license": "MIT",
   "type": "module",
-  "main": "dist/bin.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "bin": {
     "babelfish": "./dist/bin.js"
   },
@@ -15,8 +22,13 @@
     "skills/",
     "dist/",
     "python/",
+    "CHANGELOG.md",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openclaw/babelfish.git"
@@ -43,13 +55,15 @@
     "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/build.mjs",
     "test": "vitest run",
     "check": "npm run build && npm test",
-    "pack:local": "npm run build && npm pack"
+    "prepack": "npm run build",
+    "pack:check": "node scripts/check-package.mjs",
+    "pack:local": "npm pack"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^22.19.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.9.0",
     "vitest": "^4.1.4"
