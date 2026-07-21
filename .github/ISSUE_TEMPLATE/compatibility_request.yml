@@ -1,0 +1,49 @@
+name: Compatibility request
+description: Propose support for a source plugin surface or behavior.
+title: "[Compatibility]: "
+labels:
+  - enhancement
+body:
+  - type: checkboxes
+    attributes:
+      label: Checks
+      options:
+        - label: I checked the README compatibility table and existing issues.
+          required: true
+
+  - type: dropdown
+    attributes:
+      label: Source app
+      options:
+        - Claude Code
+        - Codex
+        - Hermes Agent
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Plugin or specification
+      description: Link to a public example, upstream documentation, or specification.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Source behavior
+      description: Describe the source semantics that Babelfish should preserve.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Proposed OpenClaw mapping
+      description: Explain the expected native OpenClaw behavior and any acceptable semantic gaps.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Example
+      description: Include a minimal manifest, hook, command, tool, or skill definition when possible.
+      render: text

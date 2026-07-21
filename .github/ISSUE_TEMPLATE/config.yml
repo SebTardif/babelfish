@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/openclaw/babelfish/security/advisories/new
+    about: Report security issues privately.
+  - name: Usage and compatibility support
+    url: https://github.com/openclaw/babelfish/blob/main/SUPPORT.md
+    about: Check the support guide before opening an issue.
