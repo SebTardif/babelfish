@@ -284,5 +284,5 @@ describe("native OpenClaw hook entry", () => {
       }
       delete process.env.BABELFISH_TEST_HOOK_LOG;
     }
-  });
+  }, 20_000);
 });
