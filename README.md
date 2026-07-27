@@ -13,24 +13,11 @@ instead of failing silently.
 ## Install
 
 ```bash
-npm install
-npm run build
-openclaw plugins install --link .
+openclaw plugins install npm:@openclaw/babelfish
 ```
 
-Enable the plugin:
-
-```jsonc
-{
-  "plugins": {
-    "entries": {
-      "babelfish": {
-        "enabled": true
-      }
-    }
-  }
-}
-```
+The install command registers and enables Babelfish. Restart OpenClaw after
+installing Babelfish or changing its imported plugins.
 
 Install a plugin from Git:
 

@@ -33,7 +33,13 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
-const [pack] = JSON.parse(result.stdout);
+const packOutput = JSON.parse(result.stdout);
+const pack = Array.isArray(packOutput)
+  ? packOutput[0]
+  : packOutput[packageJson.name];
+if (!pack || !Array.isArray(pack.files)) {
+  throw new Error("npm pack returned an unsupported JSON shape");
+}
 const files = new Set(pack.files.map((file) => file.path));
 const required = [
   "CHANGELOG.md",

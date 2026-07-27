@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-07-27
 
-- Add repository governance, security reporting, dependency automation, a pinned npm toolchain, cross-platform CI, and validated package entrypoints and contents.
-- Prefer exact installed Hermes plugin keys and reject ambiguous manifest aliases.
-- Run imported command hooks, monitors, and package builds through platform-portable paths; accept native Windows plugin source paths, preserve POSIX login-shell behavior, terminate process trees across platforms, and report launch failures without terminating OpenClaw.
-- Generate MCP tools, resources, and prompts only when the server advertises the corresponding capability.
+- First release: bring supported Claude Code, Codex, and Hermes Agent plugins into OpenClaw from their Git repositories.
+- Generate native OpenClaw tools, skills, commands, hooks, middleware, monitors, MCP resources, and MCP prompts while reporting unsupported source behavior instead of hiding semantic gaps.
+- Preserve source schemas and names where possible, qualify collisions deterministically, and regenerate stable plugin contracts after transactional install or uninstall operations.
+- Map compatible lifecycle, prompt, compaction, subagent, tool, and finalization hooks while keeping approval, authentication, model, and execution trust boundaries explicit.
+- Provide an optional stdio MCP compatibility server for Hermes tools and commands outside the native OpenClaw plugin path.
+- Prefer exact installed Hermes plugin identities, reject ambiguous aliases, and generate MCP operations only for capabilities advertised by each server.
+- Run hooks, monitors, and builds through portable POSIX and Windows process supervision with rollback-safe failure handling and bounded cleanup.
+- Ship validated npm entrypoints and contents with current dependencies, security reporting, dependency automation, CodeQL, and cross-platform Node 22/24 CI.
