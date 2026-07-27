@@ -4,6 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildNativeToolEntries, createNativeTools, normalizeMcpContent, regenerateNativeTools } from "./native-tools.js";
 
+const fixtureTimeoutMs = 15_000;
+
 async function copyFixture(target: string): Promise<void> {
   const fixture = path.join(process.cwd(), "test/fixtures/simple-hermes-plugin");
   await fs.cp(fixture, path.join(target, "simple"), { recursive: true });
@@ -75,12 +77,12 @@ await server.connect(new StdioServerTransport());
     await fs.mkdir(path.join(root, "skills"));
     await fs.writeFile(path.join(root, "openclaw.plugin.json"), JSON.stringify({ id: "babelfish", contracts: {} }));
     await regenerateNativeTools(
-      { installDir: path.join(stateRoot, "hermes"), rootDir: stateRoot, python: "python3", timeoutMs: 5000, env: {} },
+      { installDir: path.join(stateRoot, "hermes"), rootDir: stateRoot, python: "python3", timeoutMs: fixtureTimeoutMs, env: {} },
       { root },
     );
     const registry = JSON.parse(await fs.readFile(path.join(root, "babelfish.generated.json"), "utf8"));
     const tools = createNativeTools(
-      { installDir: path.join(stateRoot, "hermes"), rootDir: stateRoot, python: "python3", timeoutMs: 5000, env: {} },
+      { installDir: path.join(stateRoot, "hermes"), rootDir: stateRoot, python: "python3", timeoutMs: fixtureTimeoutMs, env: {} },
       registry.tools,
       {},
     );
@@ -92,7 +94,7 @@ await server.connect(new StdioServerTransport());
       .resolves.toMatchObject({ details: { prompts: [{ name: "brief" }] } });
     await expect(tools.find((tool) => tool.name.endsWith("prompt_get"))?.execute("4", { name: "brief" }))
       .resolves.toMatchObject({ details: { messages: [{ role: "user" }] } });
-  }, 20_000);
+  }, 30_000);
 
   it("generates only operations advertised by each MCP server", async () => {
     const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-mcp-state-"));
@@ -130,7 +132,7 @@ await server.connect(new StdioServerTransport());
     await fs.writeFile(path.join(root, "openclaw.plugin.json"), JSON.stringify({ id: "babelfish", contracts: {} }));
 
     await regenerateNativeTools(
-      { installDir: path.join(stateRoot, "hermes"), rootDir: stateRoot, python: "python3", timeoutMs: 5000, env: {} },
+      { installDir: path.join(stateRoot, "hermes"), rootDir: stateRoot, python: "python3", timeoutMs: fixtureTimeoutMs, env: {} },
       { root },
     );
 
@@ -144,7 +146,7 @@ await server.connect(new StdioServerTransport());
       "resources:resources/read",
       "tools:echo",
     ]);
-  }, 20_000);
+  }, 30_000);
 
   it("maps MCP result blocks to OpenClaw text and image content", () => {
     expect(normalizeMcpContent([

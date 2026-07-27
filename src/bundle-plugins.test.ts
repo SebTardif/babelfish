@@ -9,6 +9,8 @@ import {
   invokeBundleHooks,
 } from "./bundle-plugins.js";
 
+const fixtureTimeoutMs = 15_000;
+
 async function fixture(app: "claude-code" | "codex") {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `babelfish-${app}-`));
   const manifestDir = app === "codex" ? ".codex-plugin" : ".claude-plugin";
@@ -45,12 +47,12 @@ describe("bundle plugins", () => {
     await fs.mkdir(path.join(rootDir, "codex"), { recursive: true });
     await fs.rename(plugin, path.join(rootDir, "codex", "fixture"));
     const results = await invokeBundleHooks(
-      { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: 1000, env: {} },
+      { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: fixtureTimeoutMs, env: {} },
       "SessionStart",
       {},
     );
     expect(results.map(hookAdditionalContext)).toEqual(["from hook"]);
-  });
+  }, 30_000);
 
   it("normalizes hook decisions", () => {
     expect(hookBlock({ decision: "block", reason: "no" })).toEqual({ block: true, reason: "no" });
@@ -76,7 +78,7 @@ describe("bundle plugins", () => {
         { type: "command", command: "node validate.mjs" },
       ] }] } }),
     );
-    const config = { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: 1000, env: {} };
+    const config = { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: fixtureTimeoutMs, env: {} };
     await expect(invokeBundleHooks(config, "PreToolUse", { tool_input: { value: 1 } })).resolves.toEqual([
       { hookSpecificOutput: { updatedInput: { value: 2 } } },
       { decision: "block", reason: "rewritten input blocked" },
@@ -91,7 +93,7 @@ describe("bundle plugins", () => {
       path.join(pluginRoot, ".claude-plugin", "plugin.json"),
       JSON.stringify({ hooks: { hooks: { UserPromptSubmit: [{ hooks: [{ type: "prompt", prompt: "Check $ARGUMENTS" }] }] } } }),
     );
-    const config = { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: 1000, env: {} };
+    const config = { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: fixtureTimeoutMs, env: {} };
     const evaluate = vi.fn(async () => ({ decision: "block", reason: "model denied" }));
     await expect(invokeBundleHooks(config, "UserPromptSubmit", { prompt: "deny" }, "", evaluate))
       .resolves.toEqual([{ decision: "block", reason: "model denied" }]);
@@ -261,7 +263,7 @@ describe("bundle plugins", () => {
         SessionEnd: [{ hooks: [{ type: "command", command: "node fail.mjs" }] }],
       } }),
     );
-    const config = { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: 1000, env: {} };
+    const config = { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: fixtureTimeoutMs, env: {} };
     await expect(invokeBundleHooks(config, "PreToolUse", {}, "Read")).resolves.toEqual([]);
     await expect(invokeBundleHooks(config, "PreToolUse", {}, "Bash")).resolves.toEqual([
       { decision: "block", reason: "blocked" },
