@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.1.1 (Unreleased)
+
 ## 0.1.0 — 2026-07-27
 
 - First release: bring supported Claude Code, Codex, and Hermes Agent plugins into OpenClaw from their Git repositories.

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/babelfish",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packageManager": "npm@11.18.0",
   "description": "Use plugins from supported coding and agent apps in OpenClaw",
   "license": "MIT",
@@ -14,7 +14,7 @@
     }
   },
   "bin": {
-    "babelfish": "./dist/bin.js"
+    "babelfish": "dist/bin.js"
   },
   "files": [
     "openclaw.plugin.json",
