@@ -91,6 +91,7 @@ format does not provide that surface.
 | Skills and support files | Full | Full | Full | Copied into native OpenClaw plugin skills |
 | User prompt commands | Full | N/A | Partial | Hermes commands become native slash commands; Claude commands become user-only skills |
 | Terminal CLI commands | Full | N/A | N/A | Registered as top-level `openclaw <command>` commands |
+| Command-hook process output | N/A | 1 MiB per stream | 1 MiB per stream | Codex and Claude Code command hooks are terminated and reported as failed if stdout or stderr exceeds the limit |
 | Plugin-defined agents | N/A | N/A | Partial | Imported as user-only skills; model and tool isolation are not preserved |
 | Pre-tool command hooks | Full | Full | Full | Blocks and argument rewrites map to OpenClaw's pre-tool hook |
 | Permission command hooks | N/A | No | No | OpenClaw has no equivalent approval-boundary event |
@@ -199,6 +200,15 @@ npm run check
 
 The test suite covers source-runtime tools, commands, skills, hook translation,
 bundle discovery, transactional install/uninstall, and the optional MCP server.
+
+Run the Docker constrained-memory matrix:
+
+```bash
+npm run test:low-memory
+```
+
+It exercises the full gate at 1 GiB, runtime tests and end-to-end flows at
+512 MiB, and install/list/uninstall plus MCP stdio at 256 MiB.
 
 ## Contributing
 
