@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -151,5 +152,36 @@ describe("installHermesPlugin", () => {
       }),
     ).rejects.toThrow("regeneration failed");
     await expect(fs.readFile(path.join(target, "marker"), "utf8")).resolves.toBe("kept");
+  });
+
+  it("times out a hung git clone instead of waiting forever", { timeout: 8_000 }, async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-install-"));
+    const sockets: net.Socket[] = [];
+    const server = net.createServer((socket) => {
+      sockets.push(socket);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = server.address() as net.AddressInfo;
+    const started = Date.now();
+    try {
+      await expect(
+        installPlugin({
+          installDir,
+          source: `http://127.0.0.1:${port}/stalled-plugin.git`,
+          name: "stalled",
+          timeoutMs: 400,
+        }),
+      ).rejects.toMatchObject({ killed: true, signal: "SIGTERM" });
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

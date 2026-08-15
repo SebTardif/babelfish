@@ -5,11 +5,14 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+export const GIT_CLONE_TIMEOUT_MS = 120_000;
+
 export type InstallPluginParams = {
   installDir: string;
   source: string;
   name?: string;
   force?: boolean;
+  timeoutMs?: number;
   validate?: (target: string) => Promise<void>;
   afterChange?: () => Promise<void>;
 };
@@ -65,6 +68,7 @@ export async function installPlugin({
   source,
   name,
   force = false,
+  timeoutMs = GIT_CLONE_TIMEOUT_MS,
   validate,
   afterChange,
 }: InstallPluginParams): Promise<{ name: string; path: string }> {
@@ -91,6 +95,7 @@ export async function installPlugin({
   try {
     await execFileAsync("git", ["clone", "--depth", "1", source, staged], {
       maxBuffer: 1024 * 1024,
+      timeout: timeoutMs,
     });
     await validate?.(staged);
     if (replacing) {
