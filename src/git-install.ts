@@ -7,6 +7,21 @@ const execFileAsync = promisify(execFile);
 
 export const GIT_CLONE_TIMEOUT_MS = 120_000;
 
+export function resolveCloneTimeoutMs(options: {
+  cliValue?: string;
+  envValue?: string;
+} = {}): number {
+  const raw = options.cliValue ?? options.envValue;
+  if (raw === undefined) {
+    return GIT_CLONE_TIMEOUT_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || String(parsed) !== raw.trim()) {
+    throw new Error("clone timeout must be a positive integer number of milliseconds");
+  }
+  return parsed;
+}
+
 export type InstallPluginParams = {
   installDir: string;
   source: string;

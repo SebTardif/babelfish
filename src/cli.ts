@@ -1,6 +1,11 @@
 import { inspectBundlePlugin, listBundlePlugins, summarizeBundlePlugin, validateBundlePluginDirectory } from "./bundle-plugins.js";
 import { appInstallDir, resolveConfig, SUPPORTED_APPS, type SupportedApp } from "./config.js";
-import { installPlugin, uninstallPlugin, validateHermesPluginDirectory } from "./git-install.js";
+import {
+  installPlugin,
+  resolveCloneTimeoutMs,
+  uninstallPlugin,
+  validateHermesPluginDirectory,
+} from "./git-install.js";
 import { listHermesPlugins } from "./hermes-python.js";
 import { regenerateNativeTools } from "./native-tools.js";
 
@@ -18,7 +23,7 @@ function usage(): string {
     "Usage:",
     "  babelfish mcp",
     "  babelfish list [app]",
-    "  babelfish install <app> <source> [--name <name>] [--force]",
+    "  babelfish install <app> <source> [--name <name>] [--force] [--clone-timeout-ms <ms>]",
     "  babelfish uninstall <app> <name>",
   ].join("\n");
 }
@@ -79,6 +84,10 @@ export async function runBabelfishCli(args: string[]): Promise<void> {
       source,
       name: readOptionValue(args, "--name"),
       force: args.includes("--force"),
+      timeoutMs: resolveCloneTimeoutMs({
+        cliValue: readOptionValue(args, "--clone-timeout-ms"),
+        envValue: process.env.OPENCLAW_BABELFISH_CLONE_TIMEOUT_MS,
+      }),
       validate: app === "hermes"
         ? validateHermesPluginDirectory
         : (target) => validateBundlePluginDirectory(app, target),

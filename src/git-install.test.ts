@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
+  GIT_CLONE_TIMEOUT_MS,
   installHermesPlugin,
   installPlugin,
   repoNameFromSource,
+  resolveCloneTimeoutMs,
   sanitizePluginName,
   uninstallHermesPlugin,
 } from "./git-install.js";
@@ -21,6 +23,27 @@ describe("sanitizePluginName", () => {
 
   it("rejects traversal", () => {
     expect(() => sanitizePluginName("../bad")).toThrow(/letters/);
+  });
+});
+
+describe("resolveCloneTimeoutMs", () => {
+  it("defaults to 120 seconds", () => {
+    expect(resolveCloneTimeoutMs()).toBe(GIT_CLONE_TIMEOUT_MS);
+  });
+
+  it("prefers the CLI value over the environment", () => {
+    expect(resolveCloneTimeoutMs({ cliValue: "45000", envValue: "90000" })).toBe(45_000);
+  });
+
+  it("uses the environment when the CLI omits the flag", () => {
+    expect(resolveCloneTimeoutMs({ envValue: "90000" })).toBe(90_000);
+  });
+
+  it("rejects non-positive and non-integer values", () => {
+    expect(() => resolveCloneTimeoutMs({ cliValue: "0" })).toThrow(/positive integer/);
+    expect(() => resolveCloneTimeoutMs({ cliValue: "-1" })).toThrow(/positive integer/);
+    expect(() => resolveCloneTimeoutMs({ cliValue: "1.5" })).toThrow(/positive integer/);
+    expect(() => resolveCloneTimeoutMs({ envValue: "fast" })).toThrow(/positive integer/);
   });
 });
 
