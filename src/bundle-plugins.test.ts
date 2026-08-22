@@ -329,7 +329,10 @@ function bundlePlugin(root: string): BundlePlugin {
   };
 }
 
-async function writePagerServer(root: string, mode: "repeat" | "increment" | "two-page"): Promise<BundleServer> {
+async function writePagerServer(
+  root: string,
+  mode: "repeat" | "increment" | "two-page" | "slow-increment",
+): Promise<BundleServer> {
   const sdk = path.join(process.cwd(), "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm");
   const sdkUrl = (file: string) => pathToFileURL(path.join(sdk, file)).href;
   await fs.writeFile(
@@ -346,7 +349,10 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   if (mode === "repeat") {
     return {tools: [tool], nextCursor: "same"};
   }
-  if (mode === "increment") {
+  if (mode === "increment" || mode === "slow-increment") {
+    if (mode === "slow-increment") {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
     return {tools: [tool], nextCursor: "page-" + page};
   }
   const cursor = request.params?.cursor;
@@ -386,6 +392,14 @@ describe("inspectBundleServer tools/list pagination", () => {
     const server = await writePagerServer(root, "increment");
     await expect(inspectBundleServer(bundlePlugin(root), server, 10_000)).rejects.toThrow(
       /50 pages/i,
+    );
+  });
+
+  it("shares one deadline across tools/list pages", { timeout: 8_000 }, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-pager-"));
+    const server = await writePagerServer(root, "slow-increment");
+    await expect(inspectBundleServer(bundlePlugin(root), server, 100)).rejects.toThrow(
+      /timed out/i,
     );
   });
 });

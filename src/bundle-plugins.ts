@@ -625,12 +625,17 @@ export async function inspectBundleServer(
       let cursor: string | undefined;
       const seenCursors = new Set<string>();
       let pages = 0;
+      const walkStarted = Date.now();
       do {
         if (pages >= MAX_LIST_TOOLS_PAGES) {
           throw new Error(`MCP tools/list exceeded ${MAX_LIST_TOOLS_PAGES} pages`);
         }
+        const remaining = timeoutMs - (Date.now() - walkStarted);
+        if (remaining <= 0) {
+          throw new Error(`MCP tools/list walk timed out after ${timeoutMs}ms`);
+        }
         pages += 1;
-        const page = await client.listTools(cursor ? { cursor } : undefined, { timeout: timeoutMs });
+        const page = await client.listTools(cursor ? { cursor } : undefined, { timeout: remaining });
         tools.push(...page.tools);
         const next = typeof page.nextCursor === "string" && page.nextCursor !== ""
           ? page.nextCursor
