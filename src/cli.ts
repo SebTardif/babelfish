@@ -18,6 +18,17 @@ function readOptionValue(args: string[], name: string): string | undefined {
   return value && !value.startsWith("--") ? value : undefined;
 }
 
+function readRequiredOptionValue(args: string[], name: string): string | undefined {
+  if (!args.includes(name)) {
+    return undefined;
+  }
+  const value = readOptionValue(args, name);
+  if (value === undefined) {
+    throw new Error(`${name} requires a positive integer millisecond value`);
+  }
+  return value;
+}
+
 function usage(): string {
   return [
     "Usage:",
@@ -85,7 +96,7 @@ export async function runBabelfishCli(args: string[]): Promise<void> {
       name: readOptionValue(args, "--name"),
       force: args.includes("--force"),
       timeoutMs: resolveCloneTimeoutMs({
-        cliValue: readOptionValue(args, "--clone-timeout-ms"),
+        cliValue: readRequiredOptionValue(args, "--clone-timeout-ms"),
         envValue: process.env.OPENCLAW_BABELFISH_CLONE_TIMEOUT_MS,
       }),
       validate: app === "hermes"
