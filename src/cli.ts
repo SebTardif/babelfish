@@ -19,14 +19,20 @@ function readOptionValue(args: string[], name: string): string | undefined {
 }
 
 function readRequiredOptionValue(args: string[], name: string): string | undefined {
-  if (!args.includes(name)) {
-    return undefined;
+  let last: string | undefined;
+  let seen = false;
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] !== name) {
+      continue;
+    }
+    seen = true;
+    const value = args[i + 1];
+    if (!value || value.startsWith("--")) {
+      throw new Error(`${name} requires a positive integer millisecond value`);
+    }
+    last = value;
   }
-  const value = readOptionValue(args, name);
-  if (value === undefined) {
-    throw new Error(`${name} requires a positive integer millisecond value`);
-  }
-  return value;
+  return seen ? last : undefined;
 }
 
 function usage(): string {

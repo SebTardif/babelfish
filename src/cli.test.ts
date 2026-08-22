@@ -39,6 +39,20 @@ describe("babelfish install clone timeout", () => {
     ).rejects.toThrow(/--clone-timeout-ms requires a positive integer/);
   });
 
+  it("rejects a later malformed --clone-timeout-ms after a valid one", async () => {
+    await expect(
+      runBabelfishCli([
+        "install",
+        "codex",
+        "/tmp/unused",
+        "--clone-timeout-ms",
+        "400",
+        "--clone-timeout-ms",
+        "--force",
+      ]),
+    ).rejects.toThrow(/--clone-timeout-ms requires a positive integer/);
+  });
+
   it("installs a local repository when an override is long enough", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-cli-install-"));
     const source = path.join(root, "source");
