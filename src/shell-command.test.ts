@@ -22,6 +22,41 @@ describe("spawnShellCommand", () => {
     );
   });
 
+  it("spawns argv commands without a POSIX login shell", () => {
+    const child = {} as ChildProcess;
+    const spawn = vi.fn(() => child);
+
+    expect(
+      spawnShellCommand(["node", "hook.mjs", "safe; echo pwned"], { cwd: "/tmp" }, "linux", spawn),
+    ).toBe(child);
+    expect(spawn).toHaveBeenCalledWith(
+      "node",
+      ["hook.mjs", "safe; echo pwned"],
+      { cwd: "/tmp" },
+    );
+    expect(spawn.mock.calls[0]?.[1]).not.toContain("-lc");
+  });
+
+  it("spawns argv commands without the Windows shell supervisor", () => {
+    const child = {} as ChildProcess;
+    const spawn = vi.fn(() => child);
+
+    expect(
+      spawnShellCommand(["node", "hook.mjs"], { cwd: "C:\\work" }, "win32", spawn),
+    ).toBe(child);
+    expect(spawn).toHaveBeenCalledWith(
+      "node",
+      ["hook.mjs"],
+      { cwd: "C:\\work" },
+    );
+  });
+
+  it("rejects an empty argv command", () => {
+    const spawn = vi.fn();
+    expect(() => spawnShellCommand([], { cwd: "/tmp" }, "linux", spawn)).toThrow(/empty/i);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("delegates Windows command parsing to the native shell", () => {
     const child = new EventEmitter() as ChildProcess;
     const spawn = vi.fn(() => child);

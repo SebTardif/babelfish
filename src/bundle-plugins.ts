@@ -39,6 +39,7 @@ export type BundleHook = {
   matcher?: string;
   type: "command" | "prompt";
   command?: string;
+  args?: string[];
   prompt?: string;
   timeoutMs: number;
 };
@@ -240,10 +241,35 @@ function inlineServers(value: unknown): BundleServer[] {
   return servers;
 }
 
+function commandArgv(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
 function commandHook(app: BundlePlugin["app"], entry: JsonObject): BundleHook | undefined {
   const timeout = typeof entry.timeout === "number" ? entry.timeout : 60;
-  if (entry.type === "command" && typeof entry.command === "string" && entry.command.trim()) {
-    return { event: "", type: "command", command: entry.command, timeoutMs: Math.max(1000, timeout * 1000) };
+  const timeoutMs = Math.max(1000, timeout * 1000);
+  if (entry.type === "command") {
+    const argvCommand = commandArgv(entry.command);
+    if (argvCommand) {
+      const file = argvCommand[0]?.trim();
+      if (!file) {
+        return undefined;
+      }
+      return { event: "", type: "command", command: argvCommand[0], args: argvCommand.slice(1), timeoutMs };
+    }
+    if (typeof entry.command === "string" && entry.command.trim()) {
+      const args = commandArgv(entry.args);
+      return {
+        event: "",
+        type: "command",
+        command: entry.command,
+        ...(args ? { args } : {}),
+        timeoutMs,
+      };
+    }
   }
   if (
     app === "claude-code"
@@ -251,7 +277,7 @@ function commandHook(app: BundlePlugin["app"], entry: JsonObject): BundleHook | 
     && typeof entry.prompt === "string"
     && entry.prompt.trim()
   ) {
-    return { event: "", type: "prompt", prompt: entry.prompt, timeoutMs: Math.max(1000, timeout * 1000) };
+    return { event: "", type: "prompt", prompt: entry.prompt, timeoutMs };
   }
   return undefined;
 }
@@ -720,7 +746,7 @@ export async function invokeBundleHooks(
         }
         continue;
       }
-      const command = expandRoot(hook.command!, plugin.path);
+      const command = expandHookCommand(hook, plugin.path);
       let output: Awaited<ReturnType<typeof runHookCommand>>;
       try {
         output = await runHookCommand(command, plugin.path, currentPayload, hook.timeoutMs);
@@ -787,8 +813,16 @@ export function hookUpdatedInput(result: JsonObject): JsonObject | undefined {
   return object(specific?.updatedInput) ?? object(specific?.updatedMCPToolInput);
 }
 
+function expandHookCommand(hook: BundleHook, pluginRoot: string): string | string[] {
+  const command = hook.command ?? "";
+  if (hook.args) {
+    return [expandRoot(command, pluginRoot), ...hook.args.map((arg) => expandRoot(arg, pluginRoot))];
+  }
+  return expandRoot(command, pluginRoot);
+}
+
 function runHookCommand(
-  command: string,
+  command: string | readonly string[],
   cwd: string,
   payload: JsonObject,
   timeoutMs: number,

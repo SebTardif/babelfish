@@ -51,11 +51,18 @@ function spawnWindowsJobCommand(
 }
 
 export function spawnShellCommand(
-  command: string,
+  command: string | readonly string[],
   options: Omit<SpawnOptions, "shell">,
   platform: NodeJS.Platform = process.platform,
   spawnProcess: SpawnProcess = spawn,
 ): ChildProcess {
+  if (typeof command !== "string") {
+    const [file, ...args] = command;
+    if (!file) {
+      throw new Error("Command argv is empty");
+    }
+    return spawnProcess(file, args, options);
+  }
   if (platform === "win32") {
     return spawnWindowsJobCommand(command, "command", options, spawnProcess);
   }
