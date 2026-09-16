@@ -47,6 +47,8 @@ Babelfish preserves source names when they are unique and qualifies collisions w
 
 Support differs by source app and surface. See the [compatibility reference](docs/compatibility.md) for the full matrix, source-specific behavior, configuration, and example plugins.
 
+Command-hook results, including blocking exit decisions, are retained when a hook exits without reading all stdin.
+
 ## Trust and lifecycle
 
 Installing a plugin executes code from its repository while Babelfish inspects MCP tools and later runs imported hooks or tools. Review the source before installing it.
