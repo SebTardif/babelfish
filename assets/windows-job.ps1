@@ -542,7 +542,8 @@ public static class BabelfishJob {
 
 if ($PSCmdlet.ParameterSetName -eq "Argv") {
   $argvJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ArgvBase64))
-  [string[]]$commandArgv = @(ConvertFrom-Json -InputObject $argvJson)
+  # Windows PowerShell returns the JSON array as one pipeline object.
+  [string[]]$commandArgv = ConvertFrom-Json -InputObject $argvJson
   $executable = (Get-Command -Name $commandArgv[0] -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
   [string[]]$arguments = @($commandArgv | Select-Object -Skip 1)
   exit [BabelfishJob]::RunArgv($executable, $arguments, $Mode)
