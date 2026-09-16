@@ -41,6 +41,52 @@ describe("bundle plugins", () => {
     expect(plugin.hooks).toMatchObject([{ event: "SessionStart", command: "node hook.mjs" }]);
   });
 
+  it("discovers exec-form command hooks from args and command arrays", async () => {
+    const root = await fixture("claude-code");
+    await fs.writeFile(
+      path.join(root, "hooks", "hooks.json"),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [{ hooks: [{ type: "command", command: "node", args: ["hook.mjs"] }] }],
+          SessionEnd: [{ hooks: [{ type: "command", command: ["node", "hook.mjs", "done"] }] }],
+        },
+      }),
+    );
+    const plugin = await inspectBundlePlugin("claude-code", root);
+    expect(plugin.hooks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "SessionStart", command: "node", args: ["hook.mjs"] }),
+      expect.objectContaining({ event: "SessionEnd", command: "node", args: ["hook.mjs", "done"] }),
+    ]));
+  });
+
+  it("executes argv command hooks without a shell", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-root-"));
+    const pluginRoot = path.join(rootDir, "codex", "fixture");
+    await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, "argv-hook.mjs"),
+      "process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({hookSpecificOutput:{hookEventName:'SessionStart',additionalContext:process.argv.slice(2).join('\\0')}})));",
+    );
+    await fs.writeFile(
+      path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [{ hooks: [{
+            type: "command",
+            command: "node",
+            args: ["${PLUGIN_ROOT}/argv-hook.mjs", "$(echo INJECTED)"],
+          }] }],
+        },
+      }),
+    );
+    const results = await invokeBundleHooks(
+      { rootDir, installDir: path.join(rootDir, "hermes"), python: "python3", timeoutMs: fixtureTimeoutMs, env: {} },
+      "SessionStart",
+      {},
+    );
+    expect(results.map(hookAdditionalContext)).toEqual(["$(echo INJECTED)"]);
+  }, 30_000);
+
   it("executes compatible command hooks", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-root-"));
     const plugin = await fixture("codex");
