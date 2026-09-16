@@ -5,9 +5,7 @@
 - Refresh the MCP SDK, development dependencies, npm 11 tooling, and pinned CodeQL actions while retaining Node.js 22.19 support.
 - Bound imported command-hook stdout and stderr so noisy hooks cannot exhaust
   OpenClaw memory before their timeout.
-- Spawn command hooks that declare `args` or a `command` array without a
-  shell. String `command` values still run through `/bin/sh -lc`. Plugin
-  install remains trusted code execution.
+- Preserve literal arguments in exec-form command hooks while retaining Windows process-tree supervision. Thanks @SebTardif.
 - Add a Docker constrained-memory matrix covering build, tests, packaging,
   three-app plugin lifecycle, generated tools, and MCP stdio down to 256 MiB.
 

@@ -26,7 +26,7 @@ function windowsPowerShellPath(systemRoot = process.env.SystemRoot): string {
 }
 
 function spawnWindowsJobCommand(
-  command: string,
+  command: string | readonly string[],
   mode: "command" | "monitor",
   options: Omit<SpawnOptions, "shell">,
   spawnProcess: SpawnProcess,
@@ -43,8 +43,8 @@ function spawnWindowsJobCommand(
       windowsJobScript,
       "-Mode",
       mode,
-      "-CommandBase64",
-      Buffer.from(command, "utf8").toString("base64"),
+      typeof command === "string" ? "-CommandBase64" : "-ArgvBase64",
+      Buffer.from(typeof command === "string" ? command : JSON.stringify(command), "utf8").toString("base64"),
     ],
     { ...options, detached: false, windowsHide: true },
   );
@@ -60,6 +60,9 @@ export function spawnShellCommand(
     const [file, ...args] = command;
     if (!file) {
       throw new Error("Command argv is empty");
+    }
+    if (platform === "win32") {
+      return spawnWindowsJobCommand(command, "command", options, spawnProcess);
     }
     return spawnProcess(file, args, options);
   }
