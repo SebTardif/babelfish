@@ -378,5 +378,5 @@ process.exitCode = ${code};
       { decision: "block", reason: "Blocked by fixture Stop hook" },
     ]);
     await expect(invokeBundleHooks(config, "SessionEnd", {})).resolves.toEqual([]);
-  });
+  }, 30_000); // Four Windows supervisor launches can exceed Vitest's default deadline.
 });
