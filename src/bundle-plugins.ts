@@ -301,8 +301,11 @@ async function readHooks(
     collectHooks(app, object(inline.hooks) ?? inline, hooks, unsupported);
   }
   const seen = new Set<string>();
+  let remainingJsonFiles = MAX_HOOK_JSON_FILES;
   for (const candidate of paths) {
-    for (const file of await hookFiles(root, candidate)) {
+    const discovered = await hookFiles(root, candidate, remainingJsonFiles);
+    remainingJsonFiles -= discovered.length;
+    for (const file of discovered) {
       if (seen.has(file)) {
         continue;
       }
@@ -317,7 +320,11 @@ async function readHooks(
   return { hooks, unsupported };
 }
 
-async function hookFiles(root: string, candidate: string): Promise<string[]> {
+async function hookFiles(
+  root: string,
+  candidate: string,
+  remainingJsonFiles: number,
+): Promise<string[]> {
   const target = underRoot(root, candidate);
   let stats;
   try {
@@ -332,6 +339,9 @@ async function hookFiles(root: string, candidate: string): Promise<string[]> {
     throw new Error(`Plugin hook path uses a symlink: ${candidate}`);
   }
   if (!stats.isDirectory()) {
+    if (remainingJsonFiles <= 0) {
+      throw new Error(`Plugin hook tree exceeded the ${MAX_HOOK_JSON_FILES}-file limit`);
+    }
     return [target];
   }
   const files: string[] = [];
@@ -339,19 +349,24 @@ async function hookFiles(root: string, candidate: string): Promise<string[]> {
     if (depth > MAX_HOOK_WALK_DEPTH) {
       throw new Error(`Plugin hook tree exceeded the ${MAX_HOOK_WALK_DEPTH}-directory depth limit`);
     }
-    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      const child = path.join(directory, entry.name);
-      if (entry.isSymbolicLink()) {
-        throw new Error(`Plugin hook path uses a symlink: ${path.relative(root, child)}`);
-      }
-      if (entry.isDirectory()) {
-        await walk(child, depth + 1);
-      } else if (entry.isFile() && entry.name.endsWith(".json")) {
-        if (files.length >= MAX_HOOK_JSON_FILES) {
-          throw new Error(`Plugin hook tree exceeded the ${MAX_HOOK_JSON_FILES}-file limit`);
+    const dir = await fs.opendir(directory);
+    try {
+      for await (const entry of dir) {
+        const child = path.join(directory, entry.name);
+        if (entry.isSymbolicLink()) {
+          throw new Error(`Plugin hook path uses a symlink: ${path.relative(root, child)}`);
         }
-        files.push(child);
+        if (entry.isDirectory()) {
+          await walk(child, depth + 1);
+        } else if (entry.isFile() && entry.name.endsWith(".json")) {
+          if (files.length >= remainingJsonFiles) {
+            throw new Error(`Plugin hook tree exceeded the ${MAX_HOOK_JSON_FILES}-file limit`);
+          }
+          files.push(child);
+        }
       }
+    } finally {
+      await dir.close().catch(() => undefined);
     }
   }
   await walk(target, 0);
