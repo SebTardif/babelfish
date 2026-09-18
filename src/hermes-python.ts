@@ -160,8 +160,13 @@ class BridgeProcess {
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
   private queue: Promise<void> = Promise.resolve();
+  private childExit: Promise<void> = Promise.resolve();
 
   constructor(private readonly config: HermesBridgeConfig) {}
+
+  waitForExit(): Promise<void> {
+    return this.childExit;
+  }
 
   request<T>(request: BridgeRequest, options: { signal?: AbortSignal }): Promise<T> {
     const result = this.queue.then(
@@ -207,15 +212,32 @@ class BridgeProcess {
       env: { ...process.env, ...this.config.env },
       stdio: ["pipe", "pipe", "pipe"],
     });
+    let exitSettled = false;
+    let settleExit!: () => void;
+    this.childExit = new Promise<void>((resolve) => {
+      settleExit = () => {
+        if (exitSettled) {
+          return;
+        }
+        exitSettled = true;
+        resolve();
+      };
+    });
     child.unref();
     (child.stdin as unknown as UnrefHandle).unref();
     (child.stdout as unknown as UnrefHandle).unref();
     (child.stderr as unknown as UnrefHandle).unref();
     this.child = child;
+    child.stdin.on("error", () => undefined);
     child.stderr.pipe(process.stderr);
     createInterface({ input: child.stdout }).on("line", (line) => this.handleLine(line));
-    child.on("error", (error) => this.stop(error));
+    child.on("error", (error) => {
+      settleExit();
+      this.stop(error);
+    });
+    child.on("exit", () => settleExit());
     child.on("close", (code) => {
+      settleExit();
       if (this.child === child) {
         this.stop(new Error(`Babelfish adapter exited with ${code}`));
       }
@@ -283,10 +305,20 @@ function contextLane(context: HermesRuntimeContext): string | undefined {
 function runHelper<T>(
   config: HermesBridgeConfig,
   request: BridgeRequest,
-  options: { signal?: AbortSignal; isolated?: boolean } = {},
+  options: { signal?: AbortSignal; isolated?: boolean; waitForExit?: boolean } = {},
 ): Promise<T> {
   if (options.isolated) {
     const bridge = new BridgeProcess(config);
+    if (options.waitForExit) {
+      return (async () => {
+        try {
+          return await bridge.request<T>(request, options);
+        } finally {
+          bridge.reset();
+          await bridge.waitForExit();
+        }
+      })();
+    }
     return bridge.request<T>(request, options).finally(() => bridge.reset());
   }
   const key = `${bridgeKey(config)}:${requestLane(request)}`;
@@ -318,7 +350,7 @@ export function releaseHermesBridge(
 export function callHermesTool(
   config: HermesBridgeConfig,
   params: { plugin?: string; tool: string; args: unknown; context?: HermesRuntimeContext },
-  options?: { signal?: AbortSignal; isolated?: boolean },
+  options?: { signal?: AbortSignal; isolated?: boolean; waitForExit?: boolean },
 ): Promise<HermesCallResult> {
   return runHelper(config, {
     op: "call",
@@ -333,7 +365,7 @@ export function callHermesTool(
 export function callHermesCommand(
   config: HermesBridgeConfig,
   params: { plugin?: string; command: string; args: unknown; context?: HermesRuntimeContext },
-  options?: { signal?: AbortSignal; isolated?: boolean },
+  options?: { signal?: AbortSignal; isolated?: boolean; waitForExit?: boolean },
 ): Promise<HermesCommandResult> {
   return runHelper(config, {
     op: "command",

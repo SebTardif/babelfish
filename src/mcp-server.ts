@@ -42,18 +42,14 @@ type TaskState =
   | { id: string; status: "stopped"; startedAt: number; finishedAt: number; error?: string };
 
 const tasks = new Map<string, TaskState>();
+const occupyingTasks = new Set<string>();
 const MAX_FINISHED_TASKS = 100;
 export const MAX_RUNNING_TASKS = 8;
 let nextTaskId = 1;
 
 function runningTaskCount(): number {
-  let count = 0;
-  for (const task of tasks.values()) {
-    if (task.status === "running") {
-      count += 1;
-    }
-  }
-  return count;
+  // Isolated children stay alive until wait/exit; status can be stopped sooner.
+  return occupyingTasks.size;
 }
 
 function trimFinishedTasks(): void {
@@ -304,6 +300,7 @@ export function createHermesMcpServer(config: HermesBridgeConfig): Server {
       const id = `hermes-task-${nextTaskId++}`;
       const startedAt = Date.now();
       const controller = new AbortController();
+      occupyingTasks.add(id);
       tasks.set(id, { id, status: "running", startedAt, controller });
       const run =
         kind === "command"
@@ -314,7 +311,7 @@ export function createHermesMcpServer(config: HermesBridgeConfig): Server {
                 command: name,
                 args: args.args ?? "",
               },
-              { signal: controller.signal, isolated: true },
+              { signal: controller.signal, isolated: true, waitForExit: true },
             )
           : callHermesTool(
               config,
@@ -323,28 +320,33 @@ export function createHermesMcpServer(config: HermesBridgeConfig): Server {
                 tool: name,
                 args: args.args ?? {},
               },
-              { signal: controller.signal, isolated: true },
+              { signal: controller.signal, isolated: true, waitForExit: true },
             );
-      void run.then(
-        (result) => {
-          if (tasks.get(id)?.status === "running") {
-            tasks.set(id, { id, status: "completed", startedAt, finishedAt: Date.now(), result });
-            trimFinishedTasks();
-          }
-        },
-        (error: unknown) => {
-          if (tasks.get(id)?.status === "running") {
-            tasks.set(id, {
-              id,
-              status: "failed",
-              startedAt,
-              finishedAt: Date.now(),
-              error: (error as Error).message,
-            });
-            trimFinishedTasks();
-          }
-        },
-      );
+      void run
+        .then(
+          (result) => {
+            if (tasks.get(id)?.status === "running") {
+              tasks.set(id, { id, status: "completed", startedAt, finishedAt: Date.now(), result });
+              trimFinishedTasks();
+            }
+          },
+          (error: unknown) => {
+            if (tasks.get(id)?.status === "running") {
+              tasks.set(id, {
+                id,
+                status: "failed",
+                startedAt,
+                finishedAt: Date.now(),
+                error: (error as Error).message,
+              });
+              trimFinishedTasks();
+            }
+          },
+        )
+        .finally(() => {
+          occupyingTasks.delete(id);
+        })
+        .catch(() => undefined);
       return {
         content: [{ type: "text", text: stringifyResult({ id, status: "running" }) }],
         structuredContent: { id, status: "running" },
