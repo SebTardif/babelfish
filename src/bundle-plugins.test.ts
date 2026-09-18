@@ -350,6 +350,70 @@ describe("bundle plugins", () => {
     expect(plugin.hooks).toHaveLength(MAX_HOOK_JSON_FILES);
   });
 
+  it("counts conventional hooks.json once when the declared hooks directory also contains it", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-hooks-conventional-"));
+    const hooksDir = path.join(root, "hooks");
+    await fs.mkdir(path.join(root, ".claude-plugin"), { recursive: true });
+    await fs.mkdir(hooksDir, { recursive: true });
+    await fs.writeFile(
+      path.join(root, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "conventional-plus-dir", hooks: "./hooks" }),
+    );
+    const hook = { SessionStart: [{ hooks: [{ type: "command", command: "exit 0" }] }] };
+    await fs.writeFile(path.join(hooksDir, "hooks.json"), JSON.stringify({ hooks: hook }));
+    for (let index = 1; index < MAX_HOOK_JSON_FILES; index += 1) {
+      await fs.writeFile(
+        path.join(hooksDir, `hook-${String(index).padStart(2, "0")}.json`),
+        JSON.stringify({ hooks: hook }),
+      );
+    }
+    const plugin = await inspectBundlePlugin("claude-code", root);
+    expect(plugin.hooks).toHaveLength(MAX_HOOK_JSON_FILES);
+  });
+
+  it("charges overlapping Codex hook paths once at the 50-file cap", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-hooks-overlap-"));
+    const hooksDir = path.join(root, "hooks");
+    await fs.mkdir(path.join(root, ".codex-plugin"), { recursive: true });
+    await fs.mkdir(hooksDir, { recursive: true });
+    await fs.writeFile(
+      path.join(root, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "overlap-cap", hooks: ["hooks/hooks.json", "./hooks"] }),
+    );
+    const hook = { SessionStart: [{ hooks: [{ type: "command", command: "exit 0" }] }] };
+    await fs.writeFile(path.join(hooksDir, "hooks.json"), JSON.stringify({ hooks: hook }));
+    for (let index = 1; index < MAX_HOOK_JSON_FILES; index += 1) {
+      await fs.writeFile(
+        path.join(hooksDir, `hook-${String(index).padStart(2, "0")}.json`),
+        JSON.stringify({ hooks: hook }),
+      );
+    }
+    const plugin = await inspectBundlePlugin("codex", root);
+    expect(plugin.hooks).toHaveLength(MAX_HOOK_JSON_FILES);
+  });
+
+  it("still rejects overlapping Codex hook paths that exceed 50 unique files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-hooks-overlap-over-"));
+    const hooksDir = path.join(root, "hooks");
+    await fs.mkdir(path.join(root, ".codex-plugin"), { recursive: true });
+    await fs.mkdir(hooksDir, { recursive: true });
+    await fs.writeFile(
+      path.join(root, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "overlap-over", hooks: ["hooks/hooks.json", "./hooks"] }),
+    );
+    const hook = { SessionStart: [{ hooks: [{ type: "command", command: "exit 0" }] }] };
+    await fs.writeFile(path.join(hooksDir, "hooks.json"), JSON.stringify({ hooks: hook }));
+    for (let index = 1; index < MAX_HOOK_JSON_FILES + 1; index += 1) {
+      await fs.writeFile(
+        path.join(hooksDir, `hook-${String(index).padStart(2, "0")}.json`),
+        JSON.stringify({ hooks: hook }),
+      );
+    }
+    await expect(inspectBundlePlugin("codex", root)).rejects.toThrow(
+      `Plugin hook tree exceeded the ${MAX_HOOK_JSON_FILES}-file limit`,
+    );
+  });
+
   it("shares the 50-file cap across declared hook directories", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-hooks-shared-"));
     const firstDir = path.join(root, "hooks-a");
