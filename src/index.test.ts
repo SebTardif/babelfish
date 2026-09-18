@@ -285,4 +285,62 @@ describe("native OpenClaw hook entry", () => {
       delete process.env.BABELFISH_TEST_HOOK_LOG;
     }
   }, 20_000);
+
+  it("blocks before_tool_call when PreToolUse stdin exceeds 1 MiB", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-native-"));
+    const bundleRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-bundles-"));
+    const previous = process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR;
+    const previousRoot = process.env.OPENCLAW_BABELFISH_ROOT;
+    const pluginRoot = path.join(bundleRoot, "codex", "policy-hook");
+    const marker = path.join(pluginRoot, "ran.txt");
+    try {
+      process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR = installDir;
+      process.env.OPENCLAW_BABELFISH_ROOT = bundleRoot;
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, "reader.mjs"),
+        `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(marker)}, "ran"); process.exit(0);`,
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        JSON.stringify({
+          hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "node reader.mjs" }] }] },
+        }),
+      );
+      vi.resetModules();
+      const module = await import("./index.js");
+      const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+      module.default.register({
+        logger: { warn: vi.fn() },
+        on: vi.fn((name: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+          hooks.set(name, handler);
+        }),
+        registerTool: vi.fn(),
+        registerCommand: vi.fn(),
+        registerCli: vi.fn(),
+        registerAgentToolResultMiddleware: vi.fn(),
+      });
+      await expect(
+        hooks.get("before_tool_call")?.(
+          { toolName: "Bash", params: { blob: "x".repeat(1024 * 1024 + 1) } },
+          { sessionId: "session-1" },
+        ),
+      ).resolves.toEqual({
+        block: true,
+        blockReason: expect.stringContaining("1048576-byte payload limit"),
+      });
+      await expect(fs.access(marker)).rejects.toThrow();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR;
+      } else {
+        process.env.OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR = previous;
+      }
+      if (previousRoot === undefined) {
+        delete process.env.OPENCLAW_BABELFISH_ROOT;
+      } else {
+        process.env.OPENCLAW_BABELFISH_ROOT = previousRoot;
+      }
+    }
+  });
 });

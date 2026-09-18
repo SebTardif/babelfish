@@ -28,6 +28,12 @@ const SUPPORTED_HOOK_EVENTS = new Set([
 ]);
 const MAX_HOOK_OUTPUT_BYTES = 1024 * 1024;
 const MAX_HOOK_STDIN_BYTES = MAX_HOOK_OUTPUT_BYTES;
+const HOOK_STDIN_LIMIT_MESSAGE = `Hook stdin exceeded the ${MAX_HOOK_STDIN_BYTES}-byte payload limit`;
+const DECISION_HOOK_EVENTS = new Set(["PreToolUse", "UserPromptSubmit", "Stop"]);
+
+function isHookStdinLimitError(error: unknown): boolean {
+  return error instanceof Error && error.message === HOOK_STDIN_LIMIT_MESSAGE;
+}
 
 export type BundleServer = {
   name: string;
@@ -726,7 +732,14 @@ export async function invokeBundleHooks(
       try {
         output = await runHookCommand(command, plugin.path, currentPayload, hook.timeoutMs);
       } catch (error) {
-        console.warn(`Babelfish hook ${plugin.key}/${event} failed: ${(error as Error).message}`);
+        const message = (error as Error).message;
+        console.warn(`Babelfish hook ${plugin.key}/${event} failed: ${message}`);
+        if (DECISION_HOOK_EVENTS.has(event) && isHookStdinLimitError(error)) {
+          results.push({
+            decision: "block",
+            reason: message,
+          });
+        }
         continue;
       }
       if (output.blocked) {
@@ -796,9 +809,7 @@ function runHookCommand(
 ): Promise<{ stdout: string; blocked?: boolean; blockReason?: string }> {
   const stdin = JSON.stringify(payload);
   if (Buffer.byteLength(stdin, "utf8") > MAX_HOOK_STDIN_BYTES) {
-    return Promise.reject(
-      new Error(`Hook stdin exceeded the ${MAX_HOOK_STDIN_BYTES}-byte payload limit`),
-    );
+    return Promise.reject(new Error(HOOK_STDIN_LIMIT_MESSAGE));
   }
   return new Promise((resolve, reject) => {
     const child = spawnShellCommand(command, {

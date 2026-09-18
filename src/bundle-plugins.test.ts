@@ -153,6 +153,50 @@ describe("bundle plugins", () => {
     ).resolves.toEqual([{ hookSpecificOutput: { additionalContext: "ok" } }]);
   }, 30_000);
 
+  it.each(["PreToolUse", "UserPromptSubmit", "Stop"] as const)(
+    "blocks %s when stdin exceeds 1 MiB instead of skipping the decision",
+    async (event) => {
+      const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-root-"));
+      const pluginRoot = path.join(rootDir, "codex", "fixture");
+      const marker = path.join(pluginRoot, "ran.txt");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, "reader.mjs"),
+        `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(marker)}, "ran"); process.exit(0);`,
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        JSON.stringify({
+          hooks: {
+            [event]: [{ hooks: [{ type: "command", command: "node reader.mjs" }] }],
+          },
+        }),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const config = {
+        rootDir,
+        installDir: path.join(rootDir, "hermes"),
+        python: "python3",
+        timeoutMs: fixtureTimeoutMs,
+        env: {},
+      };
+      try {
+        await expect(
+          invokeBundleHooks(config, event, hookPayloadWithByteSize(1024 * 1024 + 1)),
+        ).resolves.toEqual([
+          {
+            decision: "block",
+            reason: expect.stringContaining("1048576-byte payload limit"),
+          },
+        ]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("1048576-byte payload limit"));
+        await expect(fs.access(marker)).rejects.toThrow();
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
   it("normalizes hook decisions", () => {
     expect(hookBlock({ decision: "block", reason: "no" })).toEqual({ block: true, reason: "no" });
     expect(hookUpdatedInput({ hookSpecificOutput: { updatedInput: { value: 2 } } })).toEqual({ value: 2 });

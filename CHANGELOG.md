@@ -3,6 +3,7 @@
 ## 0.1.1 (Unreleased)
 
 - Reject imported command-hook stdin payloads larger than 1 MiB, matching the existing stdout and stderr budget.
+- Fail closed when a decision-bearing command hook cannot run because stdin exceeds 1 MiB, so oversized events cannot bypass PreToolUse, UserPromptSubmit, or Stop decisions.
 - Refresh the MCP SDK, development dependencies, npm 11 tooling, and pinned CodeQL actions while retaining Node.js 22.19 support.
 - Bound imported command-hook stdout and stderr so noisy hooks cannot exhaust
   OpenClaw memory before their timeout.
