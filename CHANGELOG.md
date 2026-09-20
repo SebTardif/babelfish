@@ -3,6 +3,7 @@
 ## 0.1.1 (Unreleased)
 
 - Reject `babelfish_task_start` when eight isolated Hermes processes are already occupying slots, including children that have been stopped, completed, or timed out but have not exited yet.
+- Publish `babelfish_task_status` completion or failure when the isolated helper returns, without waiting for the child to exit; the occupancy slot still stays reserved until exit.
 - Refresh the MCP SDK, development dependencies, npm 11 tooling, and pinned CodeQL actions while retaining Node.js 22.19 support.
 - Bound imported command-hook stdout and stderr so noisy hooks cannot exhaust
   OpenClaw memory before their timeout.

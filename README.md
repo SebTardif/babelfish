@@ -62,7 +62,7 @@ Babelfish does not expose install or uninstall as agent tools. The read-only `ba
 | `openclaw babelfish uninstall <app> <name>` | Remove an imported plugin |
 | `babelfish mcp` | Start the optional Hermes-only stdio MCP server |
 
-The standalone MCP server is a compatibility fallback for MCP clients; native OpenClaw loading remains the recommended path. See [Manual MCP server](mcp/README.md) for setup and limitations. `babelfish_task_start` allows at most eight concurrent isolated Hermes processes.
+The standalone MCP server is a compatibility fallback for MCP clients; native OpenClaw loading remains the recommended path. See [Manual MCP server](mcp/README.md) for setup and limitations. `babelfish_task_start` allows at most eight concurrent isolated Hermes processes; a slot stays occupied until that child exits even if `babelfish_task_status` already reports completed.
 
 ## Development
 

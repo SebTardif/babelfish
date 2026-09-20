@@ -302,22 +302,37 @@ function contextLane(context: HermesRuntimeContext): string | undefined {
   return context.sessionKey ?? context.sessionId ?? context.agentId;
 }
 
+export type HermesHelperOptions = {
+  signal?: AbortSignal;
+  isolated?: boolean;
+  waitForExit?: boolean;
+  onOccupancy?: (occupancy: Promise<void>) => void;
+};
+
 function runHelper<T>(
   config: HermesBridgeConfig,
   request: BridgeRequest,
-  options: { signal?: AbortSignal; isolated?: boolean; waitForExit?: boolean } = {},
+  options: HermesHelperOptions = {},
 ): Promise<T> {
   if (options.isolated) {
     const bridge = new BridgeProcess(config);
     if (options.waitForExit) {
-      return (async () => {
-        try {
-          return await bridge.request<T>(request, options);
-        } finally {
+      const result = bridge.request<T>(request, options);
+      const occupancy = result
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .finally(async () => {
           bridge.reset();
           await bridge.waitForExit();
-        }
-      })();
+        })
+        .then(
+          () => undefined,
+          () => undefined,
+        );
+      options.onOccupancy?.(occupancy);
+      return result;
     }
     return bridge.request<T>(request, options).finally(() => bridge.reset());
   }
@@ -350,7 +365,7 @@ export function releaseHermesBridge(
 export function callHermesTool(
   config: HermesBridgeConfig,
   params: { plugin?: string; tool: string; args: unknown; context?: HermesRuntimeContext },
-  options?: { signal?: AbortSignal; isolated?: boolean; waitForExit?: boolean },
+  options?: HermesHelperOptions,
 ): Promise<HermesCallResult> {
   return runHelper(config, {
     op: "call",
@@ -365,7 +380,7 @@ export function callHermesTool(
 export function callHermesCommand(
   config: HermesBridgeConfig,
   params: { plugin?: string; command: string; args: unknown; context?: HermesRuntimeContext },
-  options?: { signal?: AbortSignal; isolated?: boolean; waitForExit?: boolean },
+  options?: HermesHelperOptions,
 ): Promise<HermesCommandResult> {
   return runHelper(config, {
     op: "command",

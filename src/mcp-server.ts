@@ -302,6 +302,15 @@ export function createHermesMcpServer(config: HermesBridgeConfig): Server {
       const controller = new AbortController();
       occupyingTasks.add(id);
       tasks.set(id, { id, status: "running", startedAt, controller });
+      let occupancy: Promise<unknown> | undefined;
+      const helperOptions = {
+        signal: controller.signal,
+        isolated: true as const,
+        waitForExit: true,
+        onOccupancy(promise: Promise<void>) {
+          occupancy = promise;
+        },
+      };
       const run =
         kind === "command"
           ? callHermesCommand(
@@ -311,7 +320,7 @@ export function createHermesMcpServer(config: HermesBridgeConfig): Server {
                 command: name,
                 args: args.args ?? "",
               },
-              { signal: controller.signal, isolated: true, waitForExit: true },
+              helperOptions,
             )
           : callHermesTool(
               config,
@@ -320,7 +329,7 @@ export function createHermesMcpServer(config: HermesBridgeConfig): Server {
                 tool: name,
                 args: args.args ?? {},
               },
-              { signal: controller.signal, isolated: true, waitForExit: true },
+              helperOptions,
             );
       void run
         .then(
@@ -343,6 +352,8 @@ export function createHermesMcpServer(config: HermesBridgeConfig): Server {
             }
           },
         )
+        .catch(() => undefined);
+      void (occupancy ?? run)
         .finally(() => {
           occupyingTasks.delete(id);
         })
