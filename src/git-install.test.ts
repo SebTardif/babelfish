@@ -51,7 +51,11 @@ describe("plugin lifecycle", () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-timeout-"));
     const target = path.join(installDir, "plugin");
     const sockets: net.Socket[] = [];
-    const server = net.createServer((socket) => { sockets.push(socket); socket.resume(); });
+    const server = net.createServer((socket) => {
+      sockets.push(socket);
+      socket.on("error", (error: NodeJS.ErrnoException) => expect(error.code).toBe("ECONNRESET"));
+      socket.resume();
+    });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as net.AddressInfo;
     const afterChange = vi.fn();

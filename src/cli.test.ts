@@ -59,6 +59,7 @@ describe("babelfish install clone timeout", () => {
     const sockets: net.Socket[] = [];
     const server = net.createServer((socket) => {
       sockets.push(socket);
+      socket.on("error", (error: NodeJS.ErrnoException) => expect(error.code).toBe("ECONNRESET"));
       socket.resume();
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
