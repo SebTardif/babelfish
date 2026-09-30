@@ -12,10 +12,12 @@ import { runBabelfishCli } from "./cli.js";
 import {
   callHermesCliCommand,
   callHermesCommand,
+  HermesBridgeStartError,
   invokeHermesHook,
   invokeHermesMiddleware,
   listHermesPlugins,
   releaseHermesBridge,
+  type HermesMiddlewareResult,
   type HermesRuntimeContext,
 } from "./hermes-python.js";
 import {
@@ -375,12 +377,28 @@ function registerWarnings(api: OpenClawApi): void {
 
 function registerToolHooks(api: OpenClawApi): void {
   api.on("before_tool_call", async (event, ctx) => {
-    const middlewareResult = await invokeMiddleware("tool_request", event, ctx);
+    let middlewareResult: HermesMiddlewareResult = {
+      middleware: "tool_request",
+      invoked: [],
+      results: [],
+    };
+    let bridgeReady = true;
+    try {
+      middlewareResult = await invokeMiddleware("tool_request", event, ctx);
+    } catch (error) {
+      if (!(error instanceof HermesBridgeStartError)) {
+        throw error;
+      }
+      bridgeReady = false;
+      api.logger?.warn(error.message);
+    }
     const rewrite = middlewareResult.results.map(record).find(
       (decision) => decision.args !== null && typeof decision.args === "object" && !Array.isArray(decision.args),
     );
     const hookEvent = rewrite ? { ...record(event), args: rewrite.args, params: rewrite.args } : event;
-    const hookResult = await invokeHook("pre_tool_call", hookEvent, ctx);
+    const hookResult = bridgeReady
+      ? await invokeHook("pre_tool_call", hookEvent, ctx)
+      : { hook: "pre_tool_call", invoked: [], results: [] };
     // Hermes pre_tool_call is block-only; payload rewrites belong to tool_request middleware.
     const block = hookResult.results
       .map(record)

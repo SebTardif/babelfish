@@ -155,12 +155,20 @@ type PendingRequest = {
 type BridgeResponse = { requestId: number; result?: unknown; error?: string };
 type UnrefHandle = { unref(): void };
 
+export class HermesBridgeStartError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HermesBridgeStartError";
+  }
+}
+
 class BridgeProcess {
   private child?: ChildProcessWithoutNullStreams;
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
   private queue: Promise<void> = Promise.resolve();
   private childExit: Promise<void> = Promise.resolve();
+  private sawValidResponse = false;
 
   constructor(private readonly config: HermesBridgeConfig) {}
 
@@ -208,6 +216,7 @@ class BridgeProcess {
     if (this.child) {
       return this.child;
     }
+    this.sawValidResponse = false;
     const child = spawn(this.config.python, [helperPath], {
       env: { ...process.env, ...this.config.env },
       stdio: ["pipe", "pipe", "pipe"],
@@ -235,13 +244,15 @@ class BridgeProcess {
       if (child.pid === undefined) {
         settleExit();
       }
-      this.stop(error);
+      const startup = (error as NodeJS.ErrnoException).code === "ENOENT" || child.pid === undefined;
+      this.stop(startup ? new HermesBridgeStartError(error.message) : error);
     });
     child.on("exit", () => settleExit());
     child.on("close", (code) => {
       settleExit();
       if (this.child === child) {
-        this.stop(new Error(`Babelfish adapter exited with ${code}`));
+        const message = `Babelfish adapter exited with ${code}`;
+        this.stop(this.sawValidResponse ? new Error(message) : new HermesBridgeStartError(message));
       }
     });
     return child;
@@ -255,6 +266,7 @@ class BridgeProcess {
       this.stop(new Error(`Babelfish adapter returned invalid JSON: ${(error as Error).message}`));
       return;
     }
+    this.sawValidResponse = true;
     const pending = this.pending.get(response.requestId);
     if (!pending) {
       return;

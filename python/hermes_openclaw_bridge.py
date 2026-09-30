@@ -688,7 +688,11 @@ def _hook(payload: dict[str, Any]) -> dict[str, Any]:
     results: list[Any] = []
     invoked: list[dict[str, str]] = []
     for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
-        _manifest, ctx = _load_plugin(plugin_dir)
+        try:
+            _manifest, ctx = _load_plugin(plugin_dir)
+        except Exception as exc:
+            print(f"Plugin '{plugin_dir.name}' failed to load: {exc}", file=sys.stderr)
+            continue
         for hook in ctx.hooks:
             if hook.name != hook_name:
                 continue
@@ -720,7 +724,11 @@ def _middleware(payload: dict[str, Any]) -> dict[str, Any]:
     current_request = dict(original_request)
     changed = False
     for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
-        _manifest, ctx = _load_plugin(plugin_dir)
+        try:
+            _manifest, ctx = _load_plugin(plugin_dir)
+        except Exception as exc:
+            print(f"Plugin '{plugin_dir.name}' failed to load: {exc}", file=sys.stderr)
+            continue
         for middleware in ctx.middleware:
             if middleware.kind != kind:
                 continue
