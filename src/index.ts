@@ -572,8 +572,12 @@ function registerRunHooks(api: OpenClawApi): void {
       .filter((value): value is string => typeof value === "string" && value.length > 0);
     const key = sessionKey(event, ctx);
     if (key) {
-      await sessionStartPending.get(key);
+      const pendingStart = sessionStartPending.get(key);
       sessionStartPending.delete(key);
+      await pendingStart?.catch((error: unknown) => {
+        const detail = error instanceof Error ? error.message : String(error);
+        api.logger?.warn(`Babelfish session start failed: ${detail}`);
+      });
     }
     const promptRunKey = runKey(event, ctx);
     if (promptRunKey) {
