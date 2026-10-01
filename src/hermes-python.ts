@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { HermesBridgeConfig } from "./config.js";
@@ -155,20 +157,12 @@ type PendingRequest = {
 type BridgeResponse = { requestId: number; result?: unknown; error?: string };
 type UnrefHandle = { unref(): void };
 
-export class HermesBridgeStartError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "HermesBridgeStartError";
-  }
-}
-
 class BridgeProcess {
   private child?: ChildProcessWithoutNullStreams;
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
   private queue: Promise<void> = Promise.resolve();
   private childExit: Promise<void> = Promise.resolve();
-  private sawValidResponse = false;
 
   constructor(private readonly config: HermesBridgeConfig) {}
 
@@ -216,7 +210,6 @@ class BridgeProcess {
     if (this.child) {
       return this.child;
     }
-    this.sawValidResponse = false;
     const child = spawn(this.config.python, [helperPath], {
       env: { ...process.env, ...this.config.env },
       stdio: ["pipe", "pipe", "pipe"],
@@ -244,15 +237,13 @@ class BridgeProcess {
       if (child.pid === undefined) {
         settleExit();
       }
-      const startup = (error as NodeJS.ErrnoException).code === "ENOENT" || child.pid === undefined;
-      this.stop(startup ? new HermesBridgeStartError(error.message) : error);
+      this.stop(error);
     });
     child.on("exit", () => settleExit());
     child.on("close", (code) => {
       settleExit();
       if (this.child === child) {
-        const message = `Babelfish adapter exited with ${code}`;
-        this.stop(this.sawValidResponse ? new Error(message) : new HermesBridgeStartError(message));
+        this.stop(new Error(`Babelfish adapter exited with ${code}`));
       }
     });
     return child;
@@ -261,12 +252,17 @@ class BridgeProcess {
   private handleLine(line: string): void {
     let response: BridgeResponse;
     try {
-      response = JSON.parse(line) as BridgeResponse;
+      const parsed: unknown = JSON.parse(line);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+        || !("requestId" in parsed) || !Number.isSafeInteger(parsed.requestId)
+        || ("error" in parsed ? typeof parsed.error !== "string" : !("result" in parsed))) {
+        throw new Error("invalid response envelope");
+      }
+      response = parsed as BridgeResponse;
     } catch (error) {
       this.stop(new Error(`Babelfish adapter returned invalid JSON: ${(error as Error).message}`));
       return;
     }
-    this.sawValidResponse = true;
     const pending = this.pending.get(response.requestId);
     if (!pending) {
       return;
@@ -359,7 +355,36 @@ function runHelper<T>(
   return bridge.request<T>(request, options);
 }
 
-export function listHermesPlugins(config: HermesBridgeConfig): Promise<HermesListResult> {
+async function isEmptyInstallation(installDir: string): Promise<boolean> {
+  try {
+    return (await fs.readdir(installDir)).length === 0;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    // ENOENT also describes dangling symlinks. Verify the existing ancestor
+    // before treating a missing installation as absence of providers.
+    let candidate = path.resolve(installDir);
+    for (;;) {
+      let entry;
+      try {
+        entry = await fs.lstat(candidate);
+      } catch (ancestorError) {
+        if ((ancestorError as NodeJS.ErrnoException).code !== "ENOENT") throw ancestorError;
+        const parent = path.dirname(candidate);
+        if (parent === candidate) throw ancestorError;
+        candidate = parent;
+        continue;
+      }
+      const resolved = entry.isSymbolicLink() ? await fs.stat(candidate) : entry;
+      if (!resolved.isDirectory()) throw new Error("Hermes install ancestor is not a directory");
+      return true;
+    }
+  }
+}
+
+export async function listHermesPlugins(config: HermesBridgeConfig): Promise<HermesListResult> {
+  if (await isEmptyInstallation(config.installDir)) {
+    return { installDir: config.installDir, plugins: [] };
+  }
   return runHelper(config, { op: "list", installDir: config.installDir }, { isolated: true });
 }
 
@@ -433,10 +458,13 @@ export function readHermesSkill(
   });
 }
 
-export function invokeHermesHook(
+export async function invokeHermesHook(
   config: HermesBridgeConfig,
   params: { hook: string; kwargs: Record<string, unknown>; context?: HermesRuntimeContext },
 ): Promise<HermesHookResult> {
+  if (await isEmptyInstallation(config.installDir)) {
+    return { hook: params.hook, invoked: [], results: [] };
+  }
   return runHelper(config, {
     op: "hook",
     installDir: config.installDir,
@@ -446,10 +474,13 @@ export function invokeHermesHook(
   });
 }
 
-export function invokeHermesMiddleware(
+export async function invokeHermesMiddleware(
   config: HermesBridgeConfig,
   params: { kind: string; kwargs: Record<string, unknown>; context?: HermesRuntimeContext },
 ): Promise<HermesMiddlewareResult> {
+  if (await isEmptyInstallation(config.installDir)) {
+    return { middleware: params.kind, invoked: [], results: [] };
+  }
   return runHelper(config, {
     op: "middleware",
     installDir: config.installDir,

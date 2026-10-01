@@ -6,6 +6,7 @@ import {
   callHermesCommand,
   callHermesTool,
   invokeHermesHook,
+  invokeHermesMiddleware,
   listHermesPlugins,
   readHermesSkill,
   releaseHermesBridge,
@@ -50,6 +51,69 @@ async function writeRoutingFixture(
 }
 
 describe("Hermes Python bridge", () => {
+  it.each(["empty", "missing", "nested-missing"])("skips Python only for a verified %s installation", async (kind) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-absence-"));
+    const installDir = kind === "empty" ? root : path.join(root, kind === "missing" ? "missing" : "missing/nested");
+    const config = { rootDir: root, installDir, python: path.join(root, "no-python"), timeoutMs: 1000, env: {} };
+    try {
+      await expect(listHermesPlugins(config)).resolves.toEqual({ installDir, plugins: [] });
+      await expect(invokeHermesHook(config, { hook: "pre_tool_call", kwargs: {} }))
+        .resolves.toEqual({ hook: "pre_tool_call", invoked: [], results: [] });
+      await expect(invokeHermesMiddleware(config, { kind: "tool_request", kwargs: {} }))
+        .resolves.toEqual({ middleware: "tool_request", invoked: [], results: [] });
+      for (const invoke of [
+        () => callHermesTool(config, { tool: "missing", args: {} }),
+        () => callHermesCommand(config, { command: "missing", args: "" }),
+        () => callHermesCliCommand(config, { command: "missing", args: [] }),
+        () => readHermesSkill(config, { skill: "missing" }),
+      ]) await expect(invoke()).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not cache absence or infer it from incomplete files or a stale registry", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-unknown-"));
+    const config = { rootDir: root, installDir: root, python: path.join(root, "no-python"), timeoutMs: 1000, env: {} };
+    try {
+      await expect(listHermesPlugins(config)).resolves.toMatchObject({ plugins: [] });
+      await fs.writeFile(path.join(root, "plugin.yaml"), "name: incomplete\n");
+      await fs.writeFile(path.join(root, "babelfish.generated.json"), '{"plugins":[]}');
+      await expect(listHermesPlugins(config)).rejects.toThrow();
+      await expect(invokeHermesHook(config, { hook: "pre_tool_call", kwargs: {} })).rejects.toThrow();
+      await expect(invokeHermesMiddleware(config, { kind: "tool_request", kwargs: {} })).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unreadable installation discovery", async () => {
+    const error = Object.assign(new Error("denied"), { code: "EACCES" });
+    const read = vi.spyOn(fs, "readdir").mockRejectedValue(error);
+    try {
+      await expect(invokeHermesHook(
+        { installDir: "unreadable", rootDir: ".", python: "python3", timeoutMs: 1000, env: {} },
+        { hook: "pre_tool_call", kwargs: {} },
+      )).rejects.toThrow("denied");
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("does not mistake dangling symlinks for absent installations", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-dangling-"));
+    const link = path.join(root, "link");
+    try {
+      await fs.symlink(path.join(root, "missing"), link);
+      for (const installDir of [link, path.join(link, "nested")]) {
+        await expect(listHermesPlugins({ rootDir: root, installDir, python: "python3", timeoutMs: 1000, env: {} }))
+          .rejects.toThrow();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("lists and calls a Hermes register(ctx) tool", async () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-"));
     await copyFixture(installDir);

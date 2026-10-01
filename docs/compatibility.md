@@ -59,6 +59,16 @@ Codex app connector IDs are not MCP servers and have no equivalent Babelfish run
 
 The selected Python environment must import each installed plugin and its dependencies. Plugins that import client internals also require the source client's Python package.
 
+Discovery, hooks, and middleware can return empty results without Python only
+after checking that the install directory is absent or empty. This check is not
+cached and does not trust a generated registry. Unreadable paths, dangling
+symlinks, and nonempty or incomplete installations do not establish absence.
+Explicit tool, command, CLI command, and skill requests still require Python.
+
+Installed guard failures remain failures: startup, import, registration, protocol,
+timeout, and `pre_tool_call` or `tool_request` callback errors prevent the host
+tool call. Other callback failures retain their warning-and-continue behavior.
+
 ```bash
 export OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR=/path/to/plugins
 export OPENCLAW_BABELFISH_HERMES_PYTHON=/path/to/python3

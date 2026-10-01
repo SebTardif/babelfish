@@ -8,6 +8,36 @@ async function copyFixture(target: string): Promise<void> {
 }
 
 describe("native OpenClaw hook entry", () => {
+  it("keeps imported guards active when Hermes is empty and Python is missing", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-no-hermes-"));
+    const plugin = path.join(root, "codex", "guard");
+    vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
+    vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "hermes"));
+    vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PYTHON", path.join(root, "missing-python"));
+    try {
+      await fs.mkdir(path.join(plugin, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(path.join(plugin, "guard.mjs"),
+        'process.stdin.resume();process.stdin.on("end",()=>console.log(JSON.stringify({decision:"block",reason:"imported guard"})));');
+      await fs.writeFile(path.join(plugin, ".codex-plugin", "plugin.json"), JSON.stringify({
+        hooks: { PreToolUse: [{ hooks: [{ type: "command", command: [process.execPath, "guard.mjs"] }] }] },
+      }));
+      vi.resetModules();
+      const entry = (await import("./index.js")).default;
+      const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+      entry.register({
+        on: (name, handler) => { hooks.set(name, handler); },
+        registerTool: () => undefined, registerCommand: () => undefined,
+        registerCli: () => undefined, registerAgentToolResultMiddleware: () => undefined,
+        logger: { warn: () => undefined },
+      });
+      await expect(hooks.get("before_tool_call")!({ toolName: "fixture", params: {} }, { sessionId: "guard" }))
+        .resolves.toEqual({ block: true, blockReason: "imported guard" });
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("registers hooks and maps Hermes pre_tool_call blocks", async () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-native-"));
     await copyFixture(installDir);

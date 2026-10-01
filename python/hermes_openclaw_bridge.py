@@ -688,11 +688,7 @@ def _hook(payload: dict[str, Any]) -> dict[str, Any]:
     results: list[Any] = []
     invoked: list[dict[str, str]] = []
     for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
-        try:
-            _manifest, ctx = _load_plugin(plugin_dir)
-        except Exception as exc:
-            print(f"Plugin '{plugin_dir.name}' failed to load: {exc}", file=sys.stderr)
-            continue
+        _manifest, ctx = _load_plugin(plugin_dir)
         for hook in ctx.hooks:
             if hook.name != hook_name:
                 continue
@@ -700,6 +696,8 @@ def _hook(payload: dict[str, Any]) -> dict[str, Any]:
             try:
                 result = _invoke_event_callback(hook.callback, kwargs)
             except Exception as exc:
+                if hook_name == "pre_tool_call":
+                    raise
                 print(f"Hook '{hook.name}' callback failed: {exc}", file=sys.stderr)
                 continue
             if result is not None:
@@ -724,11 +722,7 @@ def _middleware(payload: dict[str, Any]) -> dict[str, Any]:
     current_request = dict(original_request)
     changed = False
     for plugin_dir in _plugin_dirs(Path(str(payload["installDir"])).expanduser().resolve()):
-        try:
-            _manifest, ctx = _load_plugin(plugin_dir)
-        except Exception as exc:
-            print(f"Plugin '{plugin_dir.name}' failed to load: {exc}", file=sys.stderr)
-            continue
+        _manifest, ctx = _load_plugin(plugin_dir)
         for middleware in ctx.middleware:
             if middleware.kind != kind:
                 continue
@@ -745,6 +739,8 @@ def _middleware(payload: dict[str, Any]) -> dict[str, Any]:
             try:
                 result = _invoke_event_callback(middleware.callback, callback_kwargs)
             except Exception as exc:
+                if kind == "tool_request":
+                    raise
                 print(f"Middleware '{middleware.kind}' callback failed: {exc}", file=sys.stderr)
                 continue
             if result is not None:

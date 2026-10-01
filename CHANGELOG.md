@@ -2,7 +2,7 @@
 
 ## 0.1.1 (Unreleased)
 
-- Continue tool calls when the Hermes bridge cannot start, and do not drop the other plugins when one plugin fails to load.
+- Allow discovery and hooks without Python only for a verified absent or empty Hermes install; preserve failed installed guards and propagate pre-tool callback failures. Thanks @SebTardif.
 - Refresh the MCP SDK to 1.31.0, Vitest to 5.0.2, Node typings, transitive dependencies, and pinned CodeQL actions to 4.38.2 while retaining Node.js 22.19 support; clear two dependency audit advisories.
 - Bound MCP tool inspection to 50 pages and one pagination deadline, rejecting repeated cursors while preserving finite listings. Thanks @SebTardif.
 - Time out plugin Git clones after 120 seconds, terminate stalled transport processes, and preserve existing installs on failure; override with `--clone-timeout-ms` or `OPENCLAW_BABELFISH_CLONE_TIMEOUT_MS`. Thanks @SebTardif.
