@@ -17,8 +17,10 @@ describe("rejected session start", () => {
       new Promise<void>((resolve) => { releaseSecond = resolve; }),
     ];
     let starts = 0;
+    let prepared = 0;
     vi.spyOn(hermes, "invokeHermesHook").mockImplementation(async (_config, params) => {
       if (params.hook === "on_session_start") await waits[starts++];
+      if (params.hook === "pre_llm_call") prepared += 1;
       return { hook: params.hook, invoked: [], results: params.hook === "pre_llm_call" ? ["turn context"] : [] };
     });
     vi.spyOn(hermes, "listHermesPlugins").mockResolvedValue({ installDir: root, plugins: [] });
@@ -45,11 +47,13 @@ describe("rejected session start", () => {
       const secondPrepare = prepare();
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(settled).toBe(0);
+      expect(prepared).toBe(0);
       const secondStart = hooks.get("session_start")!({}, session);
       releaseFirst();
       await firstStart;
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(settled).toBe(0);
+      expect(prepared).toBe(0);
       releaseSecond();
       await secondStart;
       expect(await Promise.all([firstPrepare, secondPrepare])).toEqual([

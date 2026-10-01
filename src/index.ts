@@ -566,10 +566,6 @@ function registerRunHooks(api: OpenClawApi): void {
   });
 
   api.on("agent_turn_prepare", async (event, ctx) => {
-    const hookResult = await invokeHook("pre_llm_call", event, ctx);
-    const contextParts = hookResult.results
-      .map((result) => typeof result === "string" ? result : record(result).context)
-      .filter((value): value is string => typeof value === "string" && value.length > 0);
     const key = sessionKey(event, ctx);
     if (key) {
       for (;;) {
@@ -588,6 +584,10 @@ function registerRunHooks(api: OpenClawApi): void {
         }
       }
     }
+    const hookResult = await invokeHook("pre_llm_call", event, ctx);
+    const contextParts = hookResult.results
+      .map((result) => typeof result === "string" ? result : record(result).context)
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
     const promptRunKey = runKey(event, ctx);
     if (promptRunKey) {
       contextParts.push(...(promptContextByRun.get(promptRunKey) ?? []));
