@@ -64,7 +64,24 @@ if (process.argv[2] !== "--worker") {
       console.log(JSON.stringify({ package: `${packageName}@0.1.1`, cli: "passed", runtime: "passed", mcp: "passed", declarations: "passed", rollback: "passed", productionOnly: true, offline }));
     }
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    let lastError;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        await fs.rm(root, { recursive: true, force: true });
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        const code = error && error.code;
+        if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    if (lastError) {
+      throw lastError;
+    }
   }
 } else {
   const [consumer, tools] = process.argv.slice(3);
