@@ -3,6 +3,73 @@ import os from "node:os";
 import path from "node:path";
 
 describe("rejected session start", () => {
+  it.each([
+    ["session_end", "pending"], ["session_end", "consumed"],
+    ["before_reset", "pending"], ["before_reset", "consumed"],
+  ])("does not let older %s cleanup erase a %s replacement", async (eventName, mode) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-start-owner-"));
+    vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
+    vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "hermes"));
+    vi.resetModules();
+    const hermes = await import("./hermes-python.js");
+    const bundles = await import("./bundle-plugins.js");
+    let releaseEnd!: () => void;
+    let releaseStart!: () => void;
+    const endWait = new Promise<void>((resolve) => { releaseEnd = resolve; });
+    const startWait = new Promise<void>((resolve) => { releaseStart = resolve; });
+    let starts = 0;
+    vi.spyOn(hermes, "invokeHermesHook").mockImplementation(async (_config, params) => {
+      if (params.hook === "on_session_reset") await endWait;
+      return { hook: params.hook, invoked: [], results: [] };
+    });
+    const release = vi.spyOn(hermes, "releaseHermesBridge").mockImplementation(() => {});
+    vi.spyOn(hermes, "listHermesPlugins").mockResolvedValue({ installDir: root, plugins: [] });
+    vi.spyOn(bundles, "listBundlePlugins").mockResolvedValue([]);
+    vi.spyOn(bundles, "invokeBundleHooks").mockImplementation(async (_config, event) => {
+      if (event === "SessionEnd") await endWait;
+      if (event !== "SessionStart") return [];
+      if (++starts === 1) return [];
+      await startWait;
+      return [{ systemMessage: "replacement context" }];
+    });
+    const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+    try {
+      const entry = (await import("./index.js")).default;
+      entry.register({
+        on: (name, handler) => { hooks.set(name, handler); },
+        registerTool: () => undefined, registerCommand: () => undefined,
+        registerCli: () => undefined, registerAgentToolResultMiddleware: () => undefined,
+        logger: { warn: () => undefined },
+      });
+      const session = { sessionId: "replaced" };
+      await hooks.get("session_start")!({}, session);
+      const ending = hooks.get(eventName)!({}, session);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const replacement = hooks.get("session_start")!({}, session);
+      if (mode === "consumed") {
+        releaseStart();
+        await replacement;
+        await expect(hooks.get("agent_turn_prepare")!({}, session)).resolves.toEqual({ prependContext: "replacement context" });
+      }
+      releaseEnd();
+      await ending;
+      expect(release).not.toHaveBeenCalled();
+      releaseStart();
+      await replacement;
+      await expect(hooks.get("agent_turn_prepare")!({}, session)).resolves.toEqual(
+        mode === "pending" ? { prependContext: "replacement context" } : undefined,
+      );
+      await hooks.get("session_end")!({}, session);
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseEnd();
+      releaseStart();
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(["replacement", "end"])("preserves callback ordering across session %s", async (mode) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-start-lifecycle-"));
     vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
