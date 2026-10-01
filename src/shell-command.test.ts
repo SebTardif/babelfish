@@ -4,10 +4,25 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  commandForPlatformShell,
   spawnMonitorShellCommand,
   spawnShellCommand,
   terminateShellProcessTree,
 } from "./shell-command.js";
+
+describe("commandForPlatformShell", () => {
+  it("leaves braced variables for the POSIX shell", () => {
+    expect(commandForPlatformShell('printf "%s" "${CLAUDE_PROJECT_DIR}"', "linux")).toBe(
+      'printf "%s" "${CLAUDE_PROJECT_DIR}"',
+    );
+  });
+
+  it("asks Windows cmd to expand the same names", () => {
+    expect(commandForPlatformShell('node "${CLAUDE_PLUGIN_ROOT}\\monitor.mjs"', "win32")).toBe(
+      'node "%CLAUDE_PLUGIN_ROOT%\\monitor.mjs"',
+    );
+  });
+});
 
 describe("spawnShellCommand", () => {
   it("preserves POSIX login-shell execution", () => {

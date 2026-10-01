@@ -12,6 +12,14 @@ const windowsJobScript = fileURLToPath(
   new URL("../assets/windows-job.ps1", import.meta.url),
 );
 
+// cmd.exe expands %NAME%, not ${NAME}. The value stays in the environment.
+export function commandForPlatformShell(command: string, platform: NodeJS.Platform): string {
+  if (platform !== "win32") {
+    return command;
+  }
+  return command.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => `%${name}%`);
+}
+
 function windowsPowerShellPath(systemRoot = process.env.SystemRoot): string {
   const root = systemRoot && path.win32.isAbsolute(systemRoot)
     ? systemRoot
@@ -56,6 +64,9 @@ export function spawnShellCommand(
   platform: NodeJS.Platform = process.platform,
   spawnProcess: SpawnProcess = spawn,
 ): ChildProcess {
+  if (typeof command === "string") {
+    command = commandForPlatformShell(command, platform);
+  }
   if (typeof command !== "string") {
     const [file, ...args] = command;
     if (!file) {
@@ -78,10 +89,11 @@ export function spawnMonitorShellCommand(
   platform: NodeJS.Platform = process.platform,
   spawnProcess: SpawnProcess = spawn,
 ): ChildProcess {
+  const shellCommand = commandForPlatformShell(command, platform);
   if (platform === "win32") {
-    return spawnWindowsJobCommand(command, "monitor", options, spawnProcess);
+    return spawnWindowsJobCommand(shellCommand, "monitor", options, spawnProcess);
   }
-  return spawnShellCommand(command, options, platform, spawnProcess);
+  return spawnShellCommand(shellCommand, options, platform, spawnProcess);
 }
 
 export function terminateShellProcessTree(

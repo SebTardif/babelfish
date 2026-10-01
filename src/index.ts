@@ -197,11 +197,15 @@ async function startMonitors(
   if (monitorProcesses.get(key) !== children) return;
   for (const plugin of plugins) {
     for (const monitor of plugin.monitors) {
-      const command = monitor.command.replaceAll("${CLAUDE_PROJECT_DIR}", workspace);
-      const child = spawnMonitorShellCommand(command, {
+      const child = spawnMonitorShellCommand(monitor.command, {
         cwd: workspace,
         detached: true,
-        env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin.path, PLUGIN_ROOT: plugin.path },
+        env: {
+          ...process.env,
+          CLAUDE_PLUGIN_ROOT: plugin.path,
+          PLUGIN_ROOT: plugin.path,
+          CLAUDE_PROJECT_DIR: workspace,
+        },
         stdio: ["ignore", "pipe", "inherit"],
         windowsHide: true,
       });

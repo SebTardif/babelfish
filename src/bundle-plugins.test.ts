@@ -307,6 +307,50 @@ process.exitCode = ${code};
     }
   }, 30_000);
 
+  it.each([
+    ["command substitution", (marker: string) => `$(touch ${marker})`],
+    ...(process.platform === "win32"
+      ? []
+      : [["a broken double quote", (marker: string) => `x"; touch ${marker}; echo "`]]),
+  ])("keeps %s inside a quoted string hook variable", async (_label, payloadFor) => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-shell-hook-"));
+    const plugin = path.join(rootDir, "codex", "fixture");
+    const capturePath = path.join(rootDir, "capture.cjs");
+    const outputPath = path.join(rootDir, "output.txt");
+    const marker = path.join(rootDir, "marker");
+    const payload = payloadFor(marker);
+    const previous = process.env.CLAUDE_PROJECT_DIR;
+    process.env.CLAUDE_PROJECT_DIR = payload;
+    try {
+      expect(marker).not.toMatch(/[\s'$]/);
+      await fs.mkdir(path.join(plugin, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(capturePath, "const fs=require('node:fs'); fs.writeFileSync(process.argv[2], process.argv[3] ?? '');\n");
+      const command = [
+        JSON.stringify(process.execPath),
+        JSON.stringify(capturePath),
+        JSON.stringify(outputPath),
+        '"${CLAUDE_PROJECT_DIR}"',
+      ].join(" ");
+      await fs.writeFile(path.join(plugin, ".codex-plugin", "plugin.json"), JSON.stringify({
+        hooks: { PreToolUse: [{ hooks: [{ type: "command", command }] }] },
+      }));
+      await invokeBundleHooks({
+        rootDir,
+        installDir: path.join(rootDir, "hermes"),
+        python: "python3",
+        timeoutMs: fixtureTimeoutMs,
+        env: {},
+      }, "PreToolUse", {});
+      await expect(fs.stat(marker)).rejects.toThrow();
+      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe(payload);
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = previous;
+      await fs.rm(rootDir, { recursive: true, force: true });
+      await fs.rm(marker, { force: true });
+    }
+  }, 20_000);
+
   it("preserves earlier decisions, context, rewrites and later hooks after expansion failure", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-unset-hook-"));
     const plugin = path.join(rootDir, "codex", "fixture");

@@ -176,7 +176,7 @@ async function readMonitors(root: string, manifest: JsonObject): Promise<{ monit
     }
     monitors.push({
       name: entry.name,
-      command: entry.command.replaceAll("${CLAUDE_PLUGIN_ROOT}", root).replaceAll("${PLUGIN_ROOT}", root),
+      command: entry.command,
       description: typeof entry.description === "string" ? entry.description : entry.name,
     });
   }
@@ -882,12 +882,26 @@ export function hookUpdatedInput(result: JsonObject): JsonObject | undefined {
   return object(specific?.updatedInput) ?? object(specific?.updatedMCPToolInput);
 }
 
+function requireShellVariables(command: string): void {
+  for (const match of command.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+    const name = match[1] ?? "";
+    if (name === "CLAUDE_PLUGIN_ROOT" || name === "PLUGIN_ROOT") {
+      continue;
+    }
+    if (process.env[name] === undefined) {
+      throw new Error(`Missing environment variable ${name} required by imported MCP server.`);
+    }
+  }
+}
+
 function expandHookCommand(hook: BundleHook, pluginRoot: string): string | string[] {
   const command = hook.command ?? "";
   if (hook.args) {
     return [expandRoot(command, pluginRoot), ...hook.args.map((arg) => expandRoot(arg, pluginRoot))];
   }
-  return expandRoot(command, pluginRoot);
+  // Leave ${...} in the script so the plugin's quotes apply to the value.
+  requireShellVariables(command);
+  return command;
 }
 
 function runHookCommand(

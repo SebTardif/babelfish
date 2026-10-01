@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Let `/bin/sh` expand `${...}` in string hook and monitor commands, so quotes in the plugin command apply to the value. An unset referenced name still fails that hook before spawn. Windows rewrites those names to `%NAME%` for `cmd.exe`. Exec-form arguments stay literal argv. Thanks @SebTardif.
+
 ## 0.1.1 — 2026-10-01
 
 - Align MCP runtime identities with 0.1.1 and ship the linked compatibility guide in the public package.
