@@ -522,6 +522,7 @@ describe("native OpenClaw hook entry", () => {
         const pid = Number(await fs.readFile(pidPath, "utf8"));
         expect(() => process.kill(pid, 0)).toThrow();
       }, { timeout: 10_000 });
+      await new Promise((resolve) => setTimeout(resolve, 500));
       await expect(hooks.get("agent_turn_prepare")?.({}, { sessionId: "line-monitor" })).resolves.toEqual({
         prependContext: ["Status: cr-one", "Status: cr-two", "Status: é", "Status: final"].join("\n\n"),
       });

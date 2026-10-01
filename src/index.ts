@@ -252,6 +252,14 @@ async function startMonitors(
           terminateShellProcessTree(child, process.platform, "SIGKILL");
         }, 250).unref();
       };
+      let tailFlushed = false;
+      const flushTail = () => {
+        if (capped || tailFlushed) return;
+        tailFlushed = true;
+        takeText(decoder.end());
+        if (pendingLine.length > 0) recordLine(pendingLine);
+        pendingLine = "";
+      };
       child.stdout.on("data", (chunk: Buffer) => {
         if (capped) return;
         const room = MAX_HOOK_OUTPUT_BYTES - received;
@@ -262,12 +270,8 @@ async function startMonitors(
         }
         if (chunk.length > room) stopForCap();
       });
-      child.stdout.on("end", () => {
-        if (capped) return;
-        takeText(decoder.end());
-        if (pendingLine.length > 0) recordLine(pendingLine);
-        pendingLine = "";
-      });
+      child.stdout.on("end", flushTail);
+      child.stdout.on("close", flushTail);
     }
   }
   if (children.length === 0) {
