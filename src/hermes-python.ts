@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { HermesBridgeConfig } from "./config.js";
@@ -184,9 +186,22 @@ class BridgeProcess {
     this.stop(new Error("Babelfish adapter reset"));
   }
 
-  private execute<T>(request: BridgeRequest, options: { signal?: AbortSignal }): Promise<T> {
+  private async execute<T>(request: BridgeRequest, options: { signal?: AbortSignal }): Promise<T> {
     if (options.signal?.aborted) {
-      return Promise.reject(new Error("Babelfish adapter call cancelled"));
+      throw new Error("Babelfish adapter call cancelled");
+    }
+    // Discovery stays in the request lane so asynchronous filesystem checks
+    // cannot let a turn or tool call overtake session initialization.
+    if (request.op === "list" || request.op === "hook" || request.op === "middleware") {
+      const empty = await isEmptyInstallation(request.installDir);
+      if (options.signal?.aborted) throw new Error("Babelfish adapter call cancelled");
+      if (empty) {
+        return (request.op === "list"
+          ? { installDir: request.installDir, plugins: [] }
+          : request.op === "hook"
+            ? { hook: request.hook, invoked: [], results: [] }
+            : { middleware: request.kind, invoked: [], results: [] }) as T;
+      }
     }
     const child = this.ensureChild();
     const requestId = this.nextRequestId++;
@@ -250,7 +265,13 @@ class BridgeProcess {
   private handleLine(line: string): void {
     let response: BridgeResponse;
     try {
-      response = JSON.parse(line) as BridgeResponse;
+      const parsed: unknown = JSON.parse(line);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+        || !("requestId" in parsed) || !Number.isSafeInteger(parsed.requestId)
+        || ("error" in parsed ? typeof parsed.error !== "string" : !("result" in parsed))) {
+        throw new Error("invalid response envelope");
+      }
+      response = parsed as BridgeResponse;
     } catch (error) {
       this.stop(new Error(`Babelfish adapter returned invalid JSON: ${(error as Error).message}`));
       return;
@@ -345,6 +366,36 @@ function runHelper<T>(
     bridgeProcesses.set(key, bridge);
   }
   return bridge.request<T>(request, options);
+}
+
+async function isEmptyInstallation(installDir: string): Promise<boolean> {
+  // Python owns expanduser semantics, including named users and config.env HOME.
+  if (installDir.startsWith("~")) return false;
+  try {
+    return (await fs.readdir(installDir)).length === 0;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (installDir.split(/[\\/]/).some((part) => part === "." || part === "..")) throw error;
+    // ENOENT also describes dangling symlinks. Verify the existing ancestor
+    // before treating a missing installation as absence of providers.
+    const resolvedInstallDir = path.resolve(installDir);
+    let candidate = resolvedInstallDir;
+    for (;;) {
+      let entry;
+      try {
+        entry = await fs.lstat(candidate);
+      } catch (ancestorError) {
+        if ((ancestorError as NodeJS.ErrnoException).code !== "ENOENT") throw ancestorError;
+        const parent = path.dirname(candidate);
+        if (parent === candidate) throw ancestorError;
+        candidate = parent;
+        continue;
+      }
+      const resolved = entry.isSymbolicLink() ? await fs.stat(candidate) : entry;
+      if (!resolved.isDirectory()) throw new Error("Hermes install ancestor is not a directory");
+      return candidate !== resolvedInstallDir;
+    }
+  }
 }
 
 export function listHermesPlugins(config: HermesBridgeConfig): Promise<HermesListResult> {

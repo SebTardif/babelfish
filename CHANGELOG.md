@@ -2,6 +2,7 @@
 
 ## 0.1.1 (Unreleased)
 
+- Allow discovery and hooks without Python only for a verified absent or empty Hermes install; preserve failed installed guards and propagate pre-tool callback failures. Thanks @SebTardif.
 - Keep concurrent turns waiting for their current session start, consume its context once, and recover later turns after a failed start without deleting a newer pending start. Thanks @SebTardif.
 - Read folded and literal YAML descriptions for generated commands, agents, and output styles, preserving header comments, indentation, blank lines, and clip/strip/keep chomping across LF and CRLF; retain copied skill bodies, metadata, assets, and regeneration rollback. Thanks @SebTardif.
 - Isolate imported hook command expansion failures while retaining a blocking decision for PreToolUse, UserPromptSubmit, and Stop, preserving prior results and later hooks; observers warn and continue. Thanks @SebTardif.

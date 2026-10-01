@@ -696,6 +696,8 @@ def _hook(payload: dict[str, Any]) -> dict[str, Any]:
             try:
                 result = _invoke_event_callback(hook.callback, kwargs)
             except Exception as exc:
+                if hook_name == "pre_tool_call":
+                    raise
                 print(f"Hook '{hook.name}' callback failed: {exc}", file=sys.stderr)
                 continue
             if result is not None:
@@ -737,6 +739,8 @@ def _middleware(payload: dict[str, Any]) -> dict[str, Any]:
             try:
                 result = _invoke_event_callback(middleware.callback, callback_kwargs)
             except Exception as exc:
+                if kind == "tool_request":
+                    raise
                 print(f"Middleware '{middleware.kind}' callback failed: {exc}", file=sys.stderr)
                 continue
             if result is not None:
