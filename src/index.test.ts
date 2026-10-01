@@ -405,6 +405,7 @@ describe("native OpenClaw hook entry", () => {
     expect(marker).not.toMatch(/[\s'$]/);
     vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
     vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "empty-hermes"));
+    let hooks: Map<string, (event: unknown, ctx: unknown) => unknown> | undefined;
     try {
       await fs.mkdir(workspace, { recursive: true });
       await fs.mkdir(path.join(root, "empty-hermes"), { recursive: true });
@@ -422,7 +423,7 @@ describe("native OpenClaw hook entry", () => {
       ]));
       vi.resetModules();
       const entry = (await import("./index.js")).default;
-      const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+      hooks = new Map();
       entry.register({
         on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { hooks.set(name, handler); },
         registerTool: () => undefined,
@@ -441,10 +442,25 @@ describe("native OpenClaw hook entry", () => {
         });
       }, { timeout: 5000 });
       await expect(fs.stat(marker)).rejects.toThrow();
-      await hooks.get("session_end")?.({ sessionId: "shell-monitor" }, { sessionId: "shell-monitor" });
     } finally {
+      await hooks?.get("session_end")?.({ sessionId: "shell-monitor" }, { sessionId: "shell-monitor" });
       vi.unstubAllEnvs();
-      await fs.rm(root, { recursive: true, force: true });
+      let removed = false;
+      for (let attempt = 0; attempt < 20 && !removed; attempt += 1) {
+        try {
+          await fs.rm(root, { recursive: true, force: true });
+          removed = true;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") {
+            throw error;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+      if (!removed) {
+        await fs.rm(root, { recursive: true, force: true });
+      }
       await fs.rm(marker, { force: true });
     }
   }, 20_000);
