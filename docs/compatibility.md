@@ -28,7 +28,7 @@ Bundle paths must stay inside the plugin root, including after resolving skill-r
 | Session start hooks | Full | Full | Full | Additional context is injected into the next agent turn |
 | Session end hooks | Full | Full | Full | Codex hooks must be declared by its supported manifest or conventional path |
 | User-prompt hooks | Partial | Partial | Partial | Additional context maps; prompt replacement and hard stop do not |
-| Stop/finalization hooks | Full | Full | Full | Hermes finalization is observer-only; Codex and Claude continue/block decisions map directly |
+| Stop/finalization hooks | Full | Full | Full | Hermes finalization is observer-only. Codex and Claude `decision: "block"` asks OpenClaw to revise. `continue: false` allows finalization and outranks a block on the same hook. |
 | Pre/post compaction hooks | N/A | Full | Full | Observation hooks run around OpenClaw compaction |
 | Subagent lifecycle hooks | Full | Full | Full | Mapped to OpenClaw subagent start/end hooks |
 | Prompt or agent hook handlers | N/A | No | Partial | Claude prompt handlers use the active OpenClaw model; Codex prompt handlers and multi-turn agent handlers remain listed only |
@@ -44,6 +44,12 @@ Bundle paths must stay inside the plugin root, including after resolving skill-r
 | Marketplace-native resolution | No | No | No | Install the plugin Git repository directly |
 
 ## Claude Code
+
+For installed Claude Code and Codex Stop hooks, upgrading changes
+`continue: false` from requesting revision to finishing the turn. Precedence is
+per hook: a separate hook's block still requests revision in either order.
+Exit-2 and oversized-input Stop decisions also still request revision.
+Pre-tool and prompt hooks continue to treat `continue: false` as blocking.
 
 Babelfish reads `.claude-plugin/plugin.json`, declared or conventional skill, command, agent, output-style, hook, and MCP paths. Existing `SKILL.md` directories are copied intact. Markdown commands, agents, and output styles are converted to user-invoked OpenClaw skills.
 
