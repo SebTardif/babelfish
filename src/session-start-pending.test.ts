@@ -6,6 +6,7 @@ describe("rejected session start", () => {
   it.each([
     ["session_end", "pending"], ["session_end", "consumed"],
     ["before_reset", "pending"], ["before_reset", "consumed"],
+    ["session_end", "empty"], ["before_reset", "empty"],
   ])("does not let older %s cleanup erase a %s replacement", async (eventName, mode) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-start-owner-"));
     vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
@@ -28,9 +29,9 @@ describe("rejected session start", () => {
     vi.spyOn(bundles, "invokeBundleHooks").mockImplementation(async (_config, event) => {
       if (event === "SessionEnd") await endWait;
       if (event !== "SessionStart") return [];
-      if (++starts === 1) return [];
+      if (++starts === 1) return [{ systemMessage: "old context" }];
       await startWait;
-      return [{ systemMessage: "replacement context" }];
+      return mode === "empty" ? [] : [{ systemMessage: "replacement context" }];
     });
     const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
     try {

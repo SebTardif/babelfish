@@ -673,7 +673,10 @@ function registerSessionHooks(api: OpenClawApi): void {
   api.on("session_start", async (event, ctx) => {
     const key = sessionKey(event, ctx);
     const owner = Symbol();
-    if (key) sessionStartOwners.set(key, owner);
+    if (key) {
+      sessionStartOwners.set(key, owner);
+      sessionStartContext.delete(key);
+    }
     // Enqueue Hermes start synchronously, before a concurrent turn callback.
     const pending = (async () => {
       await invokeHook("on_session_start", event, ctx);
