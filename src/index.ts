@@ -117,6 +117,7 @@ const UNSUPPORTED_WARNING_MIDDLEWARE = new Set([
 const config = resolveConfig(undefined);
 const sessionStartContext = new Map<string, string[]>();
 const sessionStartPending = new Map<string, Promise<void>>();
+const sessionStartOwners = new Map<string, symbol>();
 const sessionStartSources = new Map<string, string>();
 const promptContextByRun = new Map<string, string[]>();
 const outputStyleBySession = new Map<string, GeneratedOutputStyleEntry>();
@@ -572,8 +573,21 @@ function registerRunHooks(api: OpenClawApi): void {
       .filter((value): value is string => typeof value === "string" && value.length > 0);
     const key = sessionKey(event, ctx);
     if (key) {
-      await sessionStartPending.get(key);
-      sessionStartPending.delete(key);
+      for (;;) {
+        const pendingStart = sessionStartPending.get(key);
+        if (!pendingStart) break;
+        try {
+          await pendingStart;
+        } catch (error) {
+          if (sessionStartPending.get(key) === pendingStart) {
+            const detail = error instanceof Error ? error.message : String(error);
+            api.logger?.warn(`Babelfish session start failed: ${detail}`);
+          }
+        } finally {
+          // Keep concurrent prepares waiting, and never remove a newer start.
+          if (sessionStartPending.get(key) === pendingStart) sessionStartPending.delete(key);
+        }
+      }
     }
     const promptRunKey = runKey(event, ctx);
     if (promptRunKey) {
@@ -617,9 +631,13 @@ function registerRunHooks(api: OpenClawApi): void {
   });
   api.on("before_agent_finalize", async (event, ctx) => {
     const imported = await bundleHooks("Stop", event, ctx);
-    const block = imported.map(hookBlock).find((decision) => decision.block);
-    return block
-      ? { action: "revise", reason: block.reason, retry: { instruction: block.reason ?? "Continue." } }
+    // Claude Code: continue false stops the turn and outranks a Stop decision.
+    const revise = imported
+      .filter((result) => result.continue !== false)
+      .map(hookBlock)
+      .find((decision) => decision.block);
+    return revise
+      ? { action: "revise", reason: revise.reason, retry: { instruction: revise.reason ?? "Continue." } }
       : undefined;
   });
   api.on("before_compaction", async (event, ctx) => {
@@ -654,8 +672,15 @@ export function registerBabelfishCli(api: OpenClawApi): void {
 function registerSessionHooks(api: OpenClawApi): void {
   api.on("session_start", async (event, ctx) => {
     const key = sessionKey(event, ctx);
+    const owner = Symbol();
+    if (key) {
+      sessionStartOwners.set(key, owner);
+      sessionStartContext.delete(key);
+    }
+    // Enqueue Hermes start synchronously, before a concurrent turn callback.
     const pending = (async () => {
       await invokeHook("on_session_start", event, ctx);
+      if (key && sessionStartOwners.get(key) !== owner) return;
       const rawEvent = record(event);
       const sessionId = typeof rawEvent.sessionId === "string" ? rawEvent.sessionId : undefined;
       const transitionSource = sessionId ? sessionStartSources.get(sessionId) : undefined;
@@ -666,6 +691,7 @@ function registerSessionHooks(api: OpenClawApi): void {
         sessionStartSources.delete(sessionId);
       }
       const imported = await bundleHooks("SessionStart", event, ctx, source);
+      if (key && sessionStartOwners.get(key) !== owner) return;
       const additional = imported
         .map(hookAdditionalContext)
         .filter((value): value is string => Boolean(value));
@@ -687,6 +713,8 @@ function registerSessionHooks(api: OpenClawApi): void {
   });
   api.on("session_end", async (event, ctx) => {
     const runtimeContext = context(ctx);
+    const key = sessionKey(event, ctx);
+    const owner = key ? sessionStartOwners.get(key) : undefined;
     try {
       await invokeHermesHook(config, {
         hook: "on_session_finalize",
@@ -707,19 +735,23 @@ function registerSessionHooks(api: OpenClawApi): void {
         }
         await bundleHooks("SessionEnd", event, ctx, typeof reason === "string" ? reason : "");
       } finally {
-        const key = sessionKey(event, ctx);
-        if (key) {
-          sessionStartContext.delete(key);
-          sessionStartPending.delete(key);
-          outputStyleBySession.delete(key);
-          stopMonitors(key);
+        if (!key || sessionStartOwners.get(key) === owner) {
+          if (key) {
+            sessionStartOwners.delete(key);
+            sessionStartContext.delete(key);
+            sessionStartPending.delete(key);
+            outputStyleBySession.delete(key);
+            stopMonitors(key);
+          }
+          releaseHermesBridge(config, runtimeContext);
         }
-        releaseHermesBridge(config, runtimeContext);
       }
     }
   });
   api.on("before_reset", async (event, ctx) => {
     const runtimeContext = context(ctx);
+    const key = sessionKey(event, ctx);
+    const owner = key ? sessionStartOwners.get(key) : undefined;
     try {
       await invokeHermesHook(config, {
         hook: "on_session_reset",
@@ -727,7 +759,9 @@ function registerSessionHooks(api: OpenClawApi): void {
         context: runtimeContext,
       });
     } finally {
-      releaseHermesBridge(config, runtimeContext);
+      if (!key || sessionStartOwners.get(key) === owner) {
+        releaseHermesBridge(config, runtimeContext);
+      }
     }
   });
 }

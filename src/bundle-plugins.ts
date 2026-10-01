@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { BabelfishConfig, SupportedApp } from "./config.js";
 import { appInstallDir } from "./config.js";
-import { splitFrontmatter } from "./markdown.js";
+import { readFrontmatterScalar, splitFrontmatter } from "./markdown.js";
 import {
   spawnShellCommand,
   terminateShellProcessTree,
@@ -141,8 +141,7 @@ async function readOutputStyles(root: string, candidates: string[]): Promise<Bun
       const source = await fs.readFile(path.join(directory, entry.name), "utf8");
       const parsed = splitFrontmatter(source);
       const frontmatter = parsed?.frontmatter ?? "";
-      const field = (name: string) => frontmatter.match(new RegExp(`^${name}:\\s*(.+)$`, "m"))?.[1]
-        ?.trim().replace(/^['"]|['"]$/g, "");
+      const field = (name: string) => readFrontmatterScalar(frontmatter, name)?.value;
       styles.push({
         name: field("name") ?? path.basename(entry.name, path.extname(entry.name)),
         description: field("description") ?? "Imported output style",
@@ -803,7 +802,17 @@ export async function invokeBundleHooks(
         }
         continue;
       }
-      const command = expandHookCommand(hook, plugin.path);
+      let command: ReturnType<typeof expandHookCommand>;
+      try {
+        command = expandHookCommand(hook, plugin.path);
+      } catch (error) {
+        const reason = `Babelfish hook ${plugin.key}/${event} command expansion failed: ${(error as Error).message}`;
+        console.warn(reason);
+        if (DECISION_HOOK_EVENTS.has(event)) {
+          results.push({ decision: "block", reason });
+        }
+        continue;
+      }
       let output: Awaited<ReturnType<typeof runHookCommand>>;
       try {
         output = await runHookCommand(command, plugin.path, currentPayload, hook.timeoutMs);
