@@ -3,6 +3,45 @@ import os from "node:os";
 import path from "node:path";
 
 describe("rejected session start", () => {
+  it("initializes real Hermes state before a concurrent turn callback", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-start-order-"));
+    const plugin = path.join(root, "hermes", "stateful");
+    vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
+    vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "hermes"));
+    const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+    const session = { sessionId: "stateful-start" };
+    try {
+      await fs.mkdir(plugin, { recursive: true });
+      await fs.writeFile(path.join(plugin, "plugin.yaml"), "name: stateful\n");
+      await fs.writeFile(path.join(plugin, "__init__.py"), [
+        "state = 'uninitialized'",
+        "def register(ctx):",
+        "    def start(**kwargs):",
+        "        global state",
+        "        state = 'initialized'",
+        "    ctx.register_hook('on_session_start', start)",
+        "    ctx.register_hook('pre_llm_call', lambda **kwargs: {'context': state})",
+        "",
+      ].join("\n"));
+      vi.resetModules();
+      const entry = (await import("./index.js")).default;
+      entry.register({
+        on: (name, handler) => { hooks.set(name, handler); },
+        registerTool: () => undefined, registerCommand: () => undefined,
+        registerCli: () => undefined, registerAgentToolResultMiddleware: () => undefined,
+        logger: { warn: () => undefined },
+      });
+      const start = hooks.get("session_start")!({}, session);
+      const prepare = hooks.get("agent_turn_prepare")!({}, session);
+      await expect(prepare).resolves.toEqual({ prependContext: "initialized" });
+      await start;
+    } finally {
+      await hooks.get("session_end")?.({}, session);
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps concurrent prepares waiting and does not remove a newer start", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-pending-start-"));
     vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
