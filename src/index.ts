@@ -566,6 +566,10 @@ function registerRunHooks(api: OpenClawApi): void {
   });
 
   api.on("agent_turn_prepare", async (event, ctx) => {
+    const hookResult = await invokeHook("pre_llm_call", event, ctx);
+    const contextParts = hookResult.results
+      .map((result) => typeof result === "string" ? result : record(result).context)
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
     const key = sessionKey(event, ctx);
     if (key) {
       for (;;) {
@@ -584,10 +588,6 @@ function registerRunHooks(api: OpenClawApi): void {
         }
       }
     }
-    const hookResult = await invokeHook("pre_llm_call", event, ctx);
-    const contextParts = hookResult.results
-      .map((result) => typeof result === "string" ? result : record(result).context)
-      .filter((value): value is string => typeof value === "string" && value.length > 0);
     const promptRunKey = runKey(event, ctx);
     if (promptRunKey) {
       contextParts.push(...(promptContextByRun.get(promptRunKey) ?? []));
@@ -667,7 +667,9 @@ export function registerBabelfishCli(api: OpenClawApi): void {
 function registerSessionHooks(api: OpenClawApi): void {
   api.on("session_start", async (event, ctx) => {
     const key = sessionKey(event, ctx);
-    const pending: Promise<void> = Promise.resolve().then(async () => {
+    // Enqueue Hermes start synchronously, before a concurrent turn callback.
+    let pending!: Promise<void>;
+    pending = (async () => {
       await invokeHook("on_session_start", event, ctx);
       if (key && sessionStartPending.get(key) !== pending) return;
       const rawEvent = record(event);
@@ -694,7 +696,7 @@ function registerSessionHooks(api: OpenClawApi): void {
           (message) => api.logger?.warn(message),
         );
       }
-    });
+    })();
     if (key) {
       sessionStartPending.set(key, pending);
     }

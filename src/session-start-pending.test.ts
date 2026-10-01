@@ -3,6 +3,70 @@ import os from "node:os";
 import path from "node:path";
 
 describe("rejected session start", () => {
+  it.each(["replacement", "end"])("preserves callback ordering across session %s", async (mode) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-start-lifecycle-"));
+    vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
+    vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "hermes"));
+    vi.resetModules();
+    const hermes = await import("./hermes-python.js");
+    const bundles = await import("./bundle-plugins.js");
+    const calls: string[] = [];
+    let releaseHook!: () => void;
+    let releaseStart!: () => void;
+    const waitHook = new Promise<void>((resolve) => { releaseHook = resolve; });
+    const waitStart = new Promise<void>((resolve) => { releaseStart = resolve; });
+    let holdStart = false;
+    vi.spyOn(hermes, "invokeHermesHook").mockImplementation(async (_config, params) => {
+      calls.push(params.hook);
+      if (params.hook === "pre_llm_call") await waitHook;
+      if (params.hook === "on_session_start" && holdStart) await waitStart;
+      return { hook: params.hook, invoked: [], results: [] };
+    });
+    vi.spyOn(hermes, "listHermesPlugins").mockResolvedValue({ installDir: root, plugins: [] });
+    vi.spyOn(bundles, "listBundlePlugins").mockResolvedValue([]);
+    vi.spyOn(bundles, "invokeBundleHooks").mockImplementation(async (_config, event) => {
+      if (event === "SessionStart" && mode === "end") await waitStart;
+      return [];
+    });
+    const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+    try {
+      const entry = (await import("./index.js")).default;
+      entry.register({
+        on: (name, handler) => { hooks.set(name, handler); },
+        registerTool: () => undefined, registerCommand: () => undefined,
+        registerCli: () => undefined, registerAgentToolResultMiddleware: () => undefined,
+        logger: { warn: () => undefined },
+      });
+      const session = { sessionId: "lifecycle" };
+      let start = hooks.get("session_start")!({}, session);
+      if (mode === "replacement") await start;
+      let settled = false;
+      const prepare = Promise.resolve(hooks.get("agent_turn_prepare")!({}, session))
+        .then((value) => { settled = true; return value; });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (mode === "replacement") {
+        holdStart = true;
+        start = hooks.get("session_start")!({}, session);
+      }
+      releaseHook();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      if (mode === "end") await hooks.get("session_end")!({}, session);
+      releaseStart();
+      await start;
+      await prepare;
+      if (mode === "replacement") await hooks.get("session_end")!({}, session);
+      expect(calls.filter((name) => name === "pre_llm_call")).toHaveLength(1);
+      expect(calls.indexOf("pre_llm_call")).toBeLessThan(calls.indexOf("on_session_finalize"));
+    } finally {
+      releaseHook();
+      releaseStart();
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("initializes real Hermes state before a concurrent turn callback", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-start-order-"));
     const plugin = path.join(root, "hermes", "stateful");
@@ -56,10 +120,8 @@ describe("rejected session start", () => {
       new Promise<void>((resolve) => { releaseSecond = resolve; }),
     ];
     let starts = 0;
-    let prepared = 0;
     vi.spyOn(hermes, "invokeHermesHook").mockImplementation(async (_config, params) => {
       if (params.hook === "on_session_start") await waits[starts++];
-      if (params.hook === "pre_llm_call") prepared += 1;
       return { hook: params.hook, invoked: [], results: params.hook === "pre_llm_call" ? ["turn context"] : [] };
     });
     vi.spyOn(hermes, "listHermesPlugins").mockResolvedValue({ installDir: root, plugins: [] });
@@ -86,13 +148,11 @@ describe("rejected session start", () => {
       const secondPrepare = prepare();
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(settled).toBe(0);
-      expect(prepared).toBe(0);
       const secondStart = hooks.get("session_start")!({}, session);
       releaseFirst();
       await firstStart;
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(settled).toBe(0);
-      expect(prepared).toBe(0);
       releaseSecond();
       await secondStart;
       expect(await Promise.all([firstPrepare, secondPrepare])).toEqual([
