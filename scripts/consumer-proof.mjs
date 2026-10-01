@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -12,6 +12,39 @@ const compilerVersion = "7.0.2";
 const nodeTypesVersion = "26.6.3";
 const script = fileURLToPath(import.meta.url);
 const packageRoot = path.resolve(path.dirname(script), "..");
+
+function stopProcessesIn(root) {
+  if (process.platform !== "win32") return;
+  const literal = root.replaceAll("'", "''");
+  const command = [
+    `$root = '${literal}'`,
+    "Get-CimInstance Win32_Process | Where-Object {",
+    "  $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($root)",
+    "} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+  ].join("; ");
+  spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
+    timeout: 20_000,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+}
+
+async function removeConsumerTree(root) {
+  let lastError;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      await fs.rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      const code = error && error.code;
+      if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") throw error;
+      stopProcessesIn(root);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError;
+}
 
 if (process.argv[2] !== "--worker") {
   const target = process.argv[2];
@@ -41,6 +74,7 @@ if (process.argv[2] !== "--worker") {
   }
   const run = (command, args, cwd) => execFileSync(command, args, { cwd, env, encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024, shell: process.platform === "win32" && command.endsWith(".cmd") });
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  let workerError;
   try {
     const tools = process.env.BABELFISH_CONSUMER_TOOLS || path.join(root, "tools");
     if (!process.env.BABELFISH_CONSUMER_TOOLS) {
@@ -63,24 +97,16 @@ if (process.argv[2] !== "--worker") {
     } else {
       console.log(JSON.stringify({ package: `${packageName}@0.1.1`, cli: "passed", runtime: "passed", mcp: "passed", declarations: "passed", rollback: "passed", productionOnly: true, offline }));
     }
+  } catch (error) {
+    workerError = error;
   } finally {
-    let lastError;
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      try {
-        await fs.rm(root, { recursive: true, force: true });
-        lastError = undefined;
-        break;
-      } catch (error) {
-        lastError = error;
-        const code = error && error.code;
-        if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") {
-          throw error;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
+    try {
+      await removeConsumerTree(root);
+    } catch (error) {
+      if (!workerError) workerError = error;
     }
-    if (lastError) throw lastError;
   }
+  if (workerError) throw workerError;
 } else {
   const [consumer, tools] = process.argv.slice(3);
   const installed = path.join(consumer, "node_modules", "@openclaw", "babelfish");
