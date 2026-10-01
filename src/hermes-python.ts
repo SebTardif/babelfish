@@ -186,9 +186,22 @@ class BridgeProcess {
     this.stop(new Error("Babelfish adapter reset"));
   }
 
-  private execute<T>(request: BridgeRequest, options: { signal?: AbortSignal }): Promise<T> {
+  private async execute<T>(request: BridgeRequest, options: { signal?: AbortSignal }): Promise<T> {
     if (options.signal?.aborted) {
-      return Promise.reject(new Error("Babelfish adapter call cancelled"));
+      throw new Error("Babelfish adapter call cancelled");
+    }
+    // Discovery stays in the request lane so asynchronous filesystem checks
+    // cannot let a turn or tool call overtake session initialization.
+    if (request.op === "list" || request.op === "hook" || request.op === "middleware") {
+      const empty = await isEmptyInstallation(request.installDir);
+      if (options.signal?.aborted) throw new Error("Babelfish adapter call cancelled");
+      if (empty) {
+        return (request.op === "list"
+          ? { installDir: request.installDir, plugins: [] }
+          : request.op === "hook"
+            ? { hook: request.hook, invoked: [], results: [] }
+            : { middleware: request.kind, invoked: [], results: [] }) as T;
+      }
     }
     const child = this.ensureChild();
     const requestId = this.nextRequestId++;
@@ -356,6 +369,8 @@ function runHelper<T>(
 }
 
 async function isEmptyInstallation(installDir: string): Promise<boolean> {
+  // Python owns expanduser semantics, including named users and config.env HOME.
+  if (installDir.startsWith("~")) return false;
   try {
     return (await fs.readdir(installDir)).length === 0;
   } catch (error) {
@@ -383,10 +398,7 @@ async function isEmptyInstallation(installDir: string): Promise<boolean> {
   }
 }
 
-export async function listHermesPlugins(config: HermesBridgeConfig): Promise<HermesListResult> {
-  if (await isEmptyInstallation(config.installDir)) {
-    return { installDir: config.installDir, plugins: [] };
-  }
+export function listHermesPlugins(config: HermesBridgeConfig): Promise<HermesListResult> {
   return runHelper(config, { op: "list", installDir: config.installDir }, { isolated: true });
 }
 
@@ -460,13 +472,10 @@ export function readHermesSkill(
   });
 }
 
-export async function invokeHermesHook(
+export function invokeHermesHook(
   config: HermesBridgeConfig,
   params: { hook: string; kwargs: Record<string, unknown>; context?: HermesRuntimeContext },
 ): Promise<HermesHookResult> {
-  if (await isEmptyInstallation(config.installDir)) {
-    return { hook: params.hook, invoked: [], results: [] };
-  }
   return runHelper(config, {
     op: "hook",
     installDir: config.installDir,
@@ -476,13 +485,10 @@ export async function invokeHermesHook(
   });
 }
 
-export async function invokeHermesMiddleware(
+export function invokeHermesMiddleware(
   config: HermesBridgeConfig,
   params: { kind: string; kwargs: Record<string, unknown>; context?: HermesRuntimeContext },
 ): Promise<HermesMiddlewareResult> {
-  if (await isEmptyInstallation(config.installDir)) {
-    return { middleware: params.kind, invoked: [], results: [] };
-  }
   return runHelper(config, {
     op: "middleware",
     installDir: config.installDir,

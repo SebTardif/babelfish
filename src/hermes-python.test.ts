@@ -100,6 +100,19 @@ describe("Hermes Python bridge", () => {
     }
   });
 
+  it.each(["~", "~/guard", "~fixture/guard"])("leaves %s expansion to Python", async (installDir) => {
+    const read = vi.spyOn(fs, "readdir");
+    const config = { rootDir: ".", installDir, python: path.join(os.tmpdir(), "babelfish-no-such-python"), timeoutMs: 1000, env: {} };
+    try {
+      await expect(listHermesPlugins(config)).rejects.toThrow();
+      await expect(invokeHermesHook(config, { hook: "pre_tool_call", kwargs: {} })).rejects.toThrow();
+      await expect(invokeHermesMiddleware(config, { kind: "tool_request", kwargs: {} })).rejects.toThrow();
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it.skipIf(process.platform === "win32")("does not mistake dangling symlinks for absent installations", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-dangling-"));
     const link = path.join(root, "link");
@@ -261,6 +274,28 @@ describe("Hermes Python bridge", () => {
     await expect(
       callHermesTool(config, { plugin: "simple", tool: "simple_state", args: {}, context }),
     ).resolves.toMatchObject({ result: { state: "unset" } });
+  });
+
+  it("keeps discovery in the request lane before a concurrent tool call", async () => {
+    const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-discovery-order-"));
+    await copyFixture(installDir);
+    const config = { rootDir: installDir, installDir, python: "python3", timeoutMs: 10000, env: {} };
+    const context = { sessionId: "discovery-order" };
+    const readdir = fs.readdir.bind(fs);
+    const read = vi.spyOn(fs, "readdir").mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return readdir(installDir);
+    });
+    try {
+      const start = invokeHermesHook(config, { hook: "on_session_start", kwargs: { value: "ordered" }, context });
+      const call = callHermesTool(config, { plugin: "simple", tool: "simple_state", args: {}, context });
+      await expect(call).resolves.toMatchObject({ result: { state: "ordered" } });
+      await start;
+    } finally {
+      read.mockRestore();
+      releaseHermesBridge(config, context);
+      await fs.rm(installDir, { recursive: true, force: true });
+    }
   });
 
   it("does not block independent sessions behind one adapter lane", async () => {

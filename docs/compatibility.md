@@ -63,6 +63,8 @@ Discovery, hooks, and middleware can return empty results without Python only
 after checking that the install directory is absent or empty. This check is not
 cached and does not trust a generated registry. Unreadable paths, dangling
 symlinks, and nonempty or incomplete installations do not establish absence.
+Unexpanded user-home paths stay on the Python path; missing paths with `.` or
+`..` components are not normalized into an absence claim.
 Explicit tool, command, CLI command, and skill requests still require Python.
 
 Installed guard failures remain failures: startup, import, registration, protocol,
