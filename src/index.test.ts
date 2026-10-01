@@ -396,7 +396,10 @@ describe("native OpenClaw hook entry", () => {
   it("keeps shell metacharacters in a quoted monitor workspace", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-shell-monitor-"));
     const marker = path.join(root, "marker");
-    const workspace = path.join(root, `proj$(touch ${marker})`);
+    // A drive colon in the directory name is illegal on Windows. The relative
+    // form is still command substitution for /bin/sh, and cwd is the workspace.
+    const trick = process.platform === "win32" ? "proj$(touch marker)" : `proj$(touch ${marker})`;
+    const workspace = path.join(root, trick);
     const plugin = path.join(root, "claude-code", "monitor-plugin");
     const scriptPath = path.join(plugin, "echo-arg.cjs");
     expect(marker).not.toMatch(/[\s'$]/);
