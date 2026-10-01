@@ -57,6 +57,12 @@ Codex app connector IDs are not MCP servers and have no equivalent Babelfish run
 
 ## Hermes Agent
 
+Turn preparation waits for the current session-start operation. A rejected start
+is reported once and removed only after settling, so later turns can retain
+their own context. Concurrent prepares also wait; completion of an older start
+cannot remove a newer pending start or publish stale start context. Successful
+start context is consumed once per session and cleared at session end.
+
 The selected Python environment must import each installed plugin and its dependencies. Plugins that import client internals also require the source client's Python package.
 
 ```bash

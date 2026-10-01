@@ -2,7 +2,7 @@
 
 ## 0.1.1 (Unreleased)
 
-- A failed session start no longer fails later turns in that session.
+- Keep concurrent turns waiting for their current session start, consume its context once, and recover later turns after a failed start without deleting a newer pending start. Thanks @SebTardif.
 - Refresh the MCP SDK to 1.31.0, Vitest to 5.0.2, Node typings, transitive dependencies, and pinned CodeQL actions to 4.38.2 while retaining Node.js 22.19 support; clear two dependency audit advisories.
 - Bound MCP tool inspection to 50 pages and one pagination deadline, rejecting repeated cursors while preserving finite listings. Thanks @SebTardif.
 - Time out plugin Git clones after 120 seconds, terminate stalled transport processes, and preserve existing installs on failure; override with `--clone-timeout-ms` or `OPENCLAW_BABELFISH_CLONE_TIMEOUT_MS`. Thanks @SebTardif.

@@ -572,12 +572,21 @@ function registerRunHooks(api: OpenClawApi): void {
       .filter((value): value is string => typeof value === "string" && value.length > 0);
     const key = sessionKey(event, ctx);
     if (key) {
-      const pendingStart = sessionStartPending.get(key);
-      sessionStartPending.delete(key);
-      await pendingStart?.catch((error: unknown) => {
-        const detail = error instanceof Error ? error.message : String(error);
-        api.logger?.warn(`Babelfish session start failed: ${detail}`);
-      });
+      for (;;) {
+        const pendingStart = sessionStartPending.get(key);
+        if (!pendingStart) break;
+        try {
+          await pendingStart;
+        } catch (error) {
+          if (sessionStartPending.get(key) === pendingStart) {
+            const detail = error instanceof Error ? error.message : String(error);
+            api.logger?.warn(`Babelfish session start failed: ${detail}`);
+          }
+        } finally {
+          // Keep concurrent prepares waiting, and never remove a newer start.
+          if (sessionStartPending.get(key) === pendingStart) sessionStartPending.delete(key);
+        }
+      }
     }
     const promptRunKey = runKey(event, ctx);
     if (promptRunKey) {
@@ -658,8 +667,9 @@ export function registerBabelfishCli(api: OpenClawApi): void {
 function registerSessionHooks(api: OpenClawApi): void {
   api.on("session_start", async (event, ctx) => {
     const key = sessionKey(event, ctx);
-    const pending = (async () => {
+    const pending: Promise<void> = Promise.resolve().then(async () => {
       await invokeHook("on_session_start", event, ctx);
+      if (key && sessionStartPending.get(key) !== pending) return;
       const rawEvent = record(event);
       const sessionId = typeof rawEvent.sessionId === "string" ? rawEvent.sessionId : undefined;
       const transitionSource = sessionId ? sessionStartSources.get(sessionId) : undefined;
@@ -670,6 +680,7 @@ function registerSessionHooks(api: OpenClawApi): void {
         sessionStartSources.delete(sessionId);
       }
       const imported = await bundleHooks("SessionStart", event, ctx, source);
+      if (key && sessionStartPending.get(key) !== pending) return;
       const additional = imported
         .map(hookAdditionalContext)
         .filter((value): value is string => Boolean(value));
@@ -683,7 +694,7 @@ function registerSessionHooks(api: OpenClawApi): void {
           (message) => api.logger?.warn(message),
         );
       }
-    })();
+    });
     if (key) {
       sessionStartPending.set(key, pending);
     }

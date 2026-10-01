@@ -3,6 +3,69 @@ import os from "node:os";
 import path from "node:path";
 
 describe("rejected session start", () => {
+  it("keeps concurrent prepares waiting and does not remove a newer start", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-pending-start-"));
+    vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
+    vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "hermes"));
+    vi.resetModules();
+    const hermes = await import("./hermes-python.js");
+    const bundles = await import("./bundle-plugins.js");
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const waits = [
+      new Promise<void>((resolve) => { releaseFirst = resolve; }),
+      new Promise<void>((resolve) => { releaseSecond = resolve; }),
+    ];
+    let starts = 0;
+    vi.spyOn(hermes, "invokeHermesHook").mockImplementation(async (_config, params) => {
+      if (params.hook === "on_session_start") await waits[starts++];
+      return { hook: params.hook, invoked: [], results: params.hook === "pre_llm_call" ? ["turn context"] : [] };
+    });
+    vi.spyOn(hermes, "listHermesPlugins").mockResolvedValue({ installDir: root, plugins: [] });
+    vi.spyOn(bundles, "listBundlePlugins").mockResolvedValue([]);
+    vi.spyOn(bundles, "invokeBundleHooks").mockImplementation(async (_config, event) =>
+      event === "SessionStart" ? [{ systemMessage: "start context" }] : []);
+    const hooks = new Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>();
+    try {
+      const entry = (await import("./index.js")).default;
+      entry.register({
+        on: (name, handler) => { hooks.set(name, handler as (event: unknown, ctx: unknown) => Promise<unknown>); },
+        registerTool: () => undefined, registerCommand: () => undefined,
+        registerCli: () => undefined, registerAgentToolResultMiddleware: () => undefined,
+        logger: { warn: () => undefined },
+      });
+      const session = { sessionId: "pending-session" };
+      const firstStart = hooks.get("session_start")!({}, session);
+      let settled = 0;
+      const prepare = () => hooks.get("agent_turn_prepare")!({}, session).then((value) => {
+        settled += 1;
+        return value;
+      });
+      const firstPrepare = prepare();
+      const secondPrepare = prepare();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(0);
+      const secondStart = hooks.get("session_start")!({}, session);
+      releaseFirst();
+      await firstStart;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(0);
+      releaseSecond();
+      await secondStart;
+      expect(await Promise.all([firstPrepare, secondPrepare])).toEqual([
+        { prependContext: "start context\n\nturn context" },
+        { prependContext: "turn context" },
+      ]);
+      await hooks.get("session_end")!({}, session);
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not fail later turns after session_start times out", async () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-session-start-"));
     const bundleRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-bundles-"));
@@ -18,6 +81,7 @@ describe("rejected session start", () => {
         "    def on_session_start(**kwargs):",
         "        time.sleep(2)",
         "    ctx.register_hook('on_session_start', on_session_start)",
+        "    ctx.register_hook('pre_llm_call', lambda **kwargs: {'context': 'after timeout'})",
         "",
       ].join("\n"),
     );
@@ -51,10 +115,11 @@ describe("rejected session start", () => {
       ).rejects.toThrow(/adapter timed out/);
 
       const prepare = hooks.get("agent_turn_prepare");
-      await expect(prepare?.({}, session)).resolves.toBeUndefined();
-      await expect(prepare?.({}, session)).resolves.toBeUndefined();
-      await expect(prepare?.({}, session)).resolves.toBeUndefined();
-      expect(logger.warn).toHaveBeenCalled();
+      for (let turn = 0; turn < 3; turn += 1) {
+        await expect(prepare?.({}, session)).resolves.toEqual({ prependContext: "after timeout" });
+      }
+      expect(logger.warn.mock.calls.filter(([message]) =>
+        String(message).startsWith("Babelfish session start failed:"))).toHaveLength(1);
     } finally {
       await hooks.get("session_end")?.({ sessionId: "slow-session" }, session);
       if (previousPluginDir === undefined) {

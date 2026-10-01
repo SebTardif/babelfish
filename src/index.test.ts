@@ -8,6 +8,43 @@ async function copyFixture(target: string): Promise<void> {
 }
 
 describe("native OpenClaw hook entry", () => {
+  it("consumes session-start context once and clears it on session end after reset", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-start-context-"));
+    const plugin = path.join(root, "codex", "start");
+    vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
+    vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "hermes"));
+    try {
+      await fs.mkdir(path.join(plugin, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(path.join(plugin, "start.mjs"),
+        'process.stdin.resume(); process.stdin.on("end", () => console.log(JSON.stringify({systemMessage:"start context"})));');
+      await fs.writeFile(path.join(plugin, ".codex-plugin", "plugin.json"), JSON.stringify({
+        hooks: { SessionStart: [{ hooks: [{ type: "command", command: [process.execPath, "start.mjs"] }] }] },
+      }));
+      vi.resetModules();
+      const entry = (await import("./index.js")).default;
+      const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+      entry.register({
+        on: (name, handler) => { hooks.set(name, handler); },
+        registerTool: () => undefined, registerCommand: () => undefined,
+        registerCli: () => undefined, registerAgentToolResultMiddleware: () => undefined,
+        logger: { warn: () => undefined },
+      });
+      const first = { sessionId: "first" };
+      const second = { sessionId: "second" };
+      await hooks.get("session_start")!({}, first);
+      await hooks.get("session_start")!({}, second);
+      await expect(hooks.get("agent_turn_prepare")!({}, first)).resolves.toEqual({ prependContext: "start context" });
+      await expect(hooks.get("agent_turn_prepare")!({}, first)).resolves.toBeUndefined();
+      await hooks.get("before_reset")!({}, second);
+      await hooks.get("session_end")!({ reason: "reset" }, second);
+      await expect(hooks.get("agent_turn_prepare")!({}, second)).resolves.toBeUndefined();
+      await hooks.get("session_end")!({}, first);
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("registers hooks and maps Hermes pre_tool_call blocks", async () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-native-"));
     await copyFixture(installDir);
