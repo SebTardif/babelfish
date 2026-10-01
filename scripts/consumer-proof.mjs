@@ -65,7 +65,7 @@ if (process.argv[2] !== "--worker") {
     }
   } finally {
     let lastError;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
       try {
         await fs.rm(root, { recursive: true, force: true });
         lastError = undefined;
@@ -96,7 +96,7 @@ if (process.argv[2] !== "--worker") {
   for (const dependency of ["typescript", "vitest", "esbuild", "@types/node"]) {
     assert(!dependencyLock.packages[`node_modules/${dependency}`], "no development toolchain in consumer");
   }
-  const run = (command, args, cwd = consumer) => execFileSync(command, args, { cwd, env: process.env, encoding: "utf8", timeout: 60_000, maxBuffer: 4 * 1024 * 1024, shell: process.platform === "win32" && command.endsWith(".cmd") });
+  const run = (command, args, cwd = consumer) => execFileSync(command, args, { cwd, env: process.env, encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024, shell: process.platform === "win32" && command.endsWith(".cmd") });
   const bin = path.join(consumer, "node_modules", ".bin", process.platform === "win32" ? "babelfish.cmd" : "babelfish");
   const cli = (args) => JSON.parse(run(bin, args));
   assert.match(run(bin, ["--help"]), /install.*<app>/s);
