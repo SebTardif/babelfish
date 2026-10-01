@@ -5,10 +5,31 @@ import os from "node:os";
 import path from "node:path";
 import {
   commandForPlatformShell,
+  expandSingleQuotedShellVariables,
   spawnMonitorShellCommand,
   spawnShellCommand,
   terminateShellProcessTree,
 } from "./shell-command.js";
+
+describe("expandSingleQuotedShellVariables", () => {
+  const resolve = (name: string) => name === "FLAG" ? "deny" : undefined;
+
+  it("leaves double-quoted and bare variables for the shell", () => {
+    expect(expandSingleQuotedShellVariables('echo "${FLAG}" ${FLAG}', resolve)).toBe(
+      'echo "${FLAG}" ${FLAG}',
+    );
+  });
+
+  it("inserts a single-quoted variable and escapes quotes in the value", () => {
+    expect(expandSingleQuotedShellVariables("echo '${FLAG}'", () => "den'y")).toBe(
+      "echo 'den'\\''y'",
+    );
+  });
+
+  it("keeps a single-quoted name the resolver does not supply", () => {
+    expect(expandSingleQuotedShellVariables("echo '${OTHER}'", resolve)).toBe("echo '${OTHER}'");
+  });
+});
 
 describe("commandForPlatformShell", () => {
   it("leaves braced variables for the POSIX shell", () => {

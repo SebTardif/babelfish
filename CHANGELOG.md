@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Let `/bin/sh` expand `${...}` in string hook and monitor commands, so quotes in the plugin command apply to the value. An unset referenced name still fails that hook before spawn. Windows rewrites those names to `%NAME%` for `cmd.exe`. Exec-form arguments stay literal argv. Thanks @SebTardif.
+- Let `/bin/sh` expand bare and double-quoted `${...}` in string hook and monitor commands, so those quotes apply to the value. Insert single-quoted names, escaping quotes in the value, so an installed `'${FLAG}'` guard still sees the value. An unset referenced name still fails that hook before spawn. Windows rewrites remaining names to `%NAME%` for `cmd.exe`. Exec-form arguments stay literal argv. Thanks @SebTardif.
 
 ## 0.1.1 — 2026-10-01
 

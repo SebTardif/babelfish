@@ -8,6 +8,7 @@ import type { BabelfishConfig, SupportedApp } from "./config.js";
 import { appInstallDir } from "./config.js";
 import { readFrontmatterScalar, splitFrontmatter } from "./markdown.js";
 import {
+  expandSingleQuotedShellVariables,
   spawnShellCommand,
   terminateShellProcessTree,
 } from "./shell-command.js";
@@ -899,9 +900,15 @@ function expandHookCommand(hook: BundleHook, pluginRoot: string): string | strin
   if (hook.args) {
     return [expandRoot(command, pluginRoot), ...hook.args.map((arg) => expandRoot(arg, pluginRoot))];
   }
-  // Leave ${...} in the script so the plugin's quotes apply to the value.
+  // Double quotes stay in the script so the shell applies them to the value.
+  // Single quotes never reach the shell's expander, so insert that value here.
   requireShellVariables(command);
-  return command;
+  return expandSingleQuotedShellVariables(command, (name) => {
+    if (name === "CLAUDE_PLUGIN_ROOT" || name === "PLUGIN_ROOT") {
+      return pluginRoot;
+    }
+    return process.env[name];
+  });
 }
 
 function runHookCommand(

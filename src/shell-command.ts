@@ -12,6 +12,61 @@ const windowsJobScript = fileURLToPath(
   new URL("../assets/windows-job.ps1", import.meta.url),
 );
 
+const SHELL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// Values already inside single quotes are inserted here. The shell never
+// expands ${NAME} in single quotes, and a raw insert would let a quote in
+// the value close the string.
+export function expandSingleQuotedShellVariables(
+  command: string,
+  resolve: (name: string) => string | undefined,
+): string {
+  let out = "";
+  let inSingle = false;
+  let inDouble = false;
+  for (let index = 0; index < command.length;) {
+    const character = command[index] ?? "";
+    if (!inDouble && character === "'") {
+      inSingle = !inSingle;
+      out += character;
+      index += 1;
+      continue;
+    }
+    if (!inSingle && character === "\"") {
+      inDouble = !inDouble;
+      out += character;
+      index += 1;
+      continue;
+    }
+    if (inDouble && character === "\\") {
+      const next = command[index + 1];
+      out += next === undefined ? character : `${character}${next}`;
+      index += next === undefined ? 1 : 2;
+      continue;
+    }
+    if (command.startsWith("${", index)) {
+      const end = command.indexOf("}", index + 2);
+      const name = end === -1 ? "" : command.slice(index + 2, end);
+      if (end !== -1 && SHELL_NAME.test(name)) {
+        if (inSingle) {
+          const value = resolve(name);
+          if (value !== undefined) {
+            out += value.replaceAll("'", "'\\''");
+            index = end + 1;
+            continue;
+          }
+        }
+        out += command.slice(index, end + 1);
+        index = end + 1;
+        continue;
+      }
+    }
+    out += character;
+    index += 1;
+  }
+  return out;
+}
+
 // cmd.exe expands %NAME%, not ${NAME}. The value stays in the environment.
 export function commandForPlatformShell(command: string, platform: NodeJS.Platform): string {
   if (platform !== "win32") {
