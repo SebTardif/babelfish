@@ -3,6 +3,20 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_HOOK_OUTPUT_BYTES } from "./bundle-plugins.js";
 
+async function removeTemp(root: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await fs.rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  await fs.rm(root, { recursive: true, force: true });
+}
+
 async function copyFixture(target: string): Promise<void> {
   const fixture = path.join(process.cwd(), "test/fixtures/simple-hermes-plugin");
   await fs.cp(fixture, path.join(target, "simple"), { recursive: true });
@@ -35,7 +49,7 @@ describe("native OpenClaw hook entry", () => {
         .resolves.toEqual({ block: true, blockReason: "imported guard" });
     } finally {
       vi.unstubAllEnvs();
-      await fs.rm(root, { recursive: true, force: true });
+      await removeTemp(root);
     }
   });
 
@@ -72,7 +86,7 @@ describe("native OpenClaw hook entry", () => {
       await hooks.get("session_end")!({}, first);
     } finally {
       vi.unstubAllEnvs();
-      await fs.rm(root, { recursive: true, force: true });
+      await removeTemp(root);
     }
   }, 15_000);
 
@@ -110,7 +124,7 @@ describe("native OpenClaw hook entry", () => {
     } finally {
       vi.unstubAllEnvs();
       warn.mockRestore();
-      await fs.rm(root, { recursive: true, force: true });
+      await removeTemp(root);
     }
   });
 
@@ -453,7 +467,7 @@ describe("native OpenClaw hook entry", () => {
     } finally {
       await hooks?.get("session_end")?.({ sessionId: "flood-monitor" }, { sessionId: "flood-monitor" });
       vi.unstubAllEnvs();
-      await fs.rm(root, { recursive: true, force: true });
+      await removeTemp(root);
     }
   }, 20_000);
 
@@ -514,7 +528,7 @@ describe("native OpenClaw hook entry", () => {
     } finally {
       await hooks?.get("session_end")?.({ sessionId: "line-monitor" }, { sessionId: "line-monitor" });
       vi.unstubAllEnvs();
-      await fs.rm(root, { recursive: true, force: true });
+      await removeTemp(root);
     }
   }, 20_000);
 
@@ -582,7 +596,7 @@ describe("native OpenClaw hook entry", () => {
     } finally {
       await hooks?.get("session_end")?.({ sessionId: "prefix-monitor" }, { sessionId: "prefix-monitor" });
       vi.unstubAllEnvs();
-      await fs.rm(root, { recursive: true, force: true });
+      await removeTemp(root);
     }
   }, 20_000);
 });
