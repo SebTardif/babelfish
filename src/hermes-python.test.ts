@@ -114,6 +114,26 @@ describe("Hermes Python bridge", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("does not normalize away a missing component before an installed guard", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-path-identity-"));
+    try {
+      await copyFixture(path.join(root, "hermes"));
+      await fs.symlink(path.join(root, "absent-target"), path.join(root, "dangling"));
+      for (const prefix of ["missing", "dangling"]) {
+        const config = {
+          rootDir: root, installDir: `${root}/${prefix}/../hermes`,
+          python: "python3", timeoutMs: 1000, env: {},
+        };
+        await expect(listHermesPlugins(config)).rejects.toThrow();
+        await expect(invokeHermesHook(config, { hook: "pre_tool_call", kwargs: { tool_name: "blocked" } }))
+          .rejects.toThrow();
+        await expect(invokeHermesMiddleware(config, { kind: "tool_request", kwargs: {} })).rejects.toThrow();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("lists and calls a Hermes register(ctx) tool", async () => {
     const installDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-babelfish-"));
     await copyFixture(installDir);

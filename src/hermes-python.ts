@@ -360,9 +360,11 @@ async function isEmptyInstallation(installDir: string): Promise<boolean> {
     return (await fs.readdir(installDir)).length === 0;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (installDir.split(/[\\/]/).some((part) => part === "." || part === "..")) throw error;
     // ENOENT also describes dangling symlinks. Verify the existing ancestor
     // before treating a missing installation as absence of providers.
-    let candidate = path.resolve(installDir);
+    const resolvedInstallDir = path.resolve(installDir);
+    let candidate = resolvedInstallDir;
     for (;;) {
       let entry;
       try {
@@ -376,7 +378,7 @@ async function isEmptyInstallation(installDir: string): Promise<boolean> {
       }
       const resolved = entry.isSymbolicLink() ? await fs.stat(candidate) : entry;
       if (!resolved.isDirectory()) throw new Error("Hermes install ancestor is not a directory");
-      return true;
+      return candidate !== resolvedInstallDir;
     }
   }
 }
