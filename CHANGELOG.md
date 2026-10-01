@@ -2,6 +2,7 @@
 
 ## 0.1.1 (Unreleased)
 
+- Keep concurrent turns waiting for their current session start, consume its context once, and recover later turns after a failed start without deleting a newer pending start. Thanks @SebTardif.
 - Read folded and literal YAML descriptions for generated commands, agents, and output styles, preserving header comments, indentation, blank lines, and clip/strip/keep chomping across LF and CRLF; retain copied skill bodies, metadata, assets, and regeneration rollback. Thanks @SebTardif.
 - Isolate imported hook command expansion failures while retaining a blocking decision for PreToolUse, UserPromptSubmit, and Stop, preserving prior results and later hooks; observers warn and continue. Thanks @SebTardif.
 - Let a Stop hook with `continue: false` finish the turn. `decision: "block"` still asks OpenClaw to revise, and `continue: false` outranks a block on the same hook. Thanks @SebTardif.
