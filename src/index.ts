@@ -1,5 +1,4 @@
 import type { ChildProcess } from "node:child_process";
-import readline from "node:readline";
 import { resolveConfig } from "./config.js";
 import {
   hookAdditionalContext,
@@ -7,6 +6,7 @@ import {
   hookUpdatedInput,
   invokeBundleHooks,
   listBundlePlugins,
+  MAX_HOOK_OUTPUT_BYTES,
 } from "./bundle-plugins.js";
 import { runBabelfishCli } from "./cli.js";
 import {
@@ -222,14 +222,35 @@ async function startMonitors(
         child.kill();
         continue;
       }
-      const lines = readline.createInterface({ input: child.stdout });
-      lines.on("line", (line) => {
+      let received = 0;
+      let capped = false;
+      let pendingLine = "";
+      const recordLine = (line: string) => {
         const text = line.trim();
         if (!text) return;
         if (!monitorProcesses.get(key)?.includes(child)) return;
         const pending = monitorContext.get(key) ?? [];
         pending.push(`${monitor.description}: ${text}`);
         monitorContext.set(key, pending.slice(-50));
+      };
+      child.stdout.on("data", (chunk: Buffer) => {
+        if (capped) return;
+        received += chunk.length;
+        if (received > MAX_HOOK_OUTPUT_BYTES) {
+          capped = true;
+          warn(
+            `Babelfish monitor ${plugin.key}/${monitor.name} exceeded the ${MAX_HOOK_OUTPUT_BYTES}-byte output limit`,
+          );
+          terminateShellProcessTree(child);
+          setTimeout(() => {
+            terminateShellProcessTree(child, process.platform, "SIGKILL");
+          }, 250).unref();
+          return;
+        }
+        pendingLine += chunk.toString("utf8");
+        const parts = pendingLine.split("\n");
+        pendingLine = parts.pop() ?? "";
+        for (const part of parts) recordLine(part);
       });
     }
   }

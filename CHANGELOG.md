@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Terminate a session monitor when its stdout exceeds 1 MiB, matching the command-hook output limit, and keep the last 50 lines already received. Thanks @SebTardif.
+
 ## 0.1.1 — 2026-10-01
 
 - Align MCP runtime identities with 0.1.1 and ship the linked compatibility guide in the public package.
