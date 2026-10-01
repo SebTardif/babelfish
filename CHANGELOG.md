@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Terminate a session monitor when its stdout exceeds 1 MiB, matching the command-hook output limit, and keep the last 50 lines already received. Thanks @SebTardif.
+- Terminate a session monitor when its total stdout exceeds 1 MiB, including output already consumed by a turn. Keep complete lines that fit under the cap, including a final line with no newline and carriage-return breaks, and decode UTF-8 across reads. Thanks @SebTardif.
 
 ## 0.1.1 — 2026-10-01
 

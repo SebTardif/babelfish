@@ -456,6 +456,135 @@ describe("native OpenClaw hook entry", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   }, 20_000);
+
+  it("keeps monitor lines split across bytes, breaks, and end of output", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-monitor-lines-"));
+    const plugin = path.join(root, "claude-code", "monitor-plugin");
+    const scriptPath = path.join(plugin, "lines.cjs");
+    const pidPath = path.join(root, "pid");
+    vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
+    vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "empty-hermes"));
+    let hooks: Map<string, (event: unknown, ctx: unknown) => unknown> | undefined;
+    try {
+      await fs.mkdir(path.join(root, "empty-hermes"), { recursive: true });
+      await fs.mkdir(path.join(plugin, ".claude-plugin"), { recursive: true });
+      await fs.mkdir(path.join(plugin, "monitors"), { recursive: true });
+      await fs.writeFile(scriptPath, `
+        const fs = require("node:fs");
+        fs.writeFileSync(process.argv[2], String(process.pid));
+        const out = process.stdout;
+        const accent = Buffer.from("é", "utf8");
+        out.write(Buffer.from("cr-one\\rcr-two\\n"));
+        out.write(accent.subarray(0, 1));
+        out.write(Buffer.concat([accent.subarray(1), Buffer.from("\\n")]));
+        out.write(Buffer.from("final"));
+      `);
+      const quote = (value: string) => process.platform === "win32"
+        ? `"${value.replaceAll('"', '""')}"`
+        : JSON.stringify(value);
+      const command = process.platform === "win32"
+        ? `node "%CLAUDE_PLUGIN_ROOT%\\lines.cjs" ${quote(pidPath)}`
+        : `${quote(process.execPath)} ${quote(scriptPath)} ${quote(pidPath)}`;
+      await fs.writeFile(path.join(plugin, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "monitor-plugin" }));
+      await fs.writeFile(path.join(plugin, "monitors", "monitors.json"), JSON.stringify([
+        { name: "status", description: "Status", command },
+      ]));
+      vi.resetModules();
+      const entry = (await import("./index.js")).default;
+      hooks = new Map();
+      entry.register({
+        on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { hooks.set(name, handler); },
+        registerTool: () => undefined,
+        registerCommand: () => undefined,
+        registerCli: () => undefined,
+        registerAgentToolResultMiddleware: () => undefined,
+        logger: { warn: () => undefined },
+      });
+      await hooks.get("session_start")?.(
+        { sessionId: "line-monitor" },
+        { sessionId: "line-monitor", workspaceDir: root },
+      );
+      await vi.waitFor(async () => {
+        const pid = Number(await fs.readFile(pidPath, "utf8"));
+        expect(() => process.kill(pid, 0)).toThrow();
+      }, { timeout: 10_000 });
+      await expect(hooks.get("agent_turn_prepare")?.({}, { sessionId: "line-monitor" })).resolves.toEqual({
+        prependContext: ["Status: cr-one", "Status: cr-two", "Status: é", "Status: final"].join("\n\n"),
+      });
+    } finally {
+      await hooks?.get("session_end")?.({ sessionId: "line-monitor" }, { sessionId: "line-monitor" });
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("keeps a complete line in the chunk that crosses the output limit", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-monitor-prefix-"));
+    const plugin = path.join(root, "claude-code", "monitor-plugin");
+    const scriptPath = path.join(plugin, "prefix.cjs");
+    const pidPath = path.join(root, "pid");
+    vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
+    vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "empty-hermes"));
+    const warn = vi.fn();
+    let hooks: Map<string, (event: unknown, ctx: unknown) => unknown> | undefined;
+    try {
+      await fs.mkdir(path.join(root, "empty-hermes"), { recursive: true });
+      await fs.mkdir(path.join(plugin, ".claude-plugin"), { recursive: true });
+      await fs.mkdir(path.join(plugin, "monitors"), { recursive: true });
+      await fs.writeFile(scriptPath, `
+        const fs = require("node:fs");
+        fs.writeFileSync(process.argv[2], String(process.pid));
+        process.stdout.write(Buffer.concat([
+          Buffer.from("ready\\n"),
+          Buffer.alloc(${MAX_HOOK_OUTPUT_BYTES}, 0x41),
+        ]));
+        setInterval(() => {}, 1000);
+      `);
+      const quote = (value: string) => process.platform === "win32"
+        ? `"${value.replaceAll('"', '""')}"`
+        : JSON.stringify(value);
+      const command = process.platform === "win32"
+        ? `node "%CLAUDE_PLUGIN_ROOT%\\prefix.cjs" ${quote(pidPath)}`
+        : `${quote(process.execPath)} ${quote(scriptPath)} ${quote(pidPath)}`;
+      await fs.writeFile(path.join(plugin, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "monitor-plugin" }));
+      await fs.writeFile(path.join(plugin, "monitors", "monitors.json"), JSON.stringify([
+        { name: "status", description: "Status", command },
+      ]));
+      vi.resetModules();
+      const entry = (await import("./index.js")).default;
+      hooks = new Map();
+      entry.register({
+        on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { hooks.set(name, handler); },
+        registerTool: () => undefined,
+        registerCommand: () => undefined,
+        registerCli: () => undefined,
+        registerAgentToolResultMiddleware: () => undefined,
+        logger: { warn },
+      });
+      await hooks.get("session_start")?.(
+        { sessionId: "prefix-monitor" },
+        { sessionId: "prefix-monitor", workspaceDir: root },
+      );
+      let pid = 0;
+      await vi.waitFor(async () => {
+        pid = Number(await fs.readFile(pidPath, "utf8"));
+        expect(pid).toBeGreaterThan(0);
+      }, { timeout: 10_000 });
+      await vi.waitFor(() => {
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${MAX_HOOK_OUTPUT_BYTES}-byte output limit`));
+      }, { timeout: 10_000 });
+      await vi.waitFor(() => {
+        expect(() => process.kill(pid, 0)).toThrow();
+      }, { timeout: 5_000 });
+      await expect(hooks.get("agent_turn_prepare")?.({}, { sessionId: "prefix-monitor" })).resolves.toEqual({
+        prependContext: "Status: ready",
+      });
+    } finally {
+      await hooks?.get("session_end")?.({ sessionId: "prefix-monitor" }, { sessionId: "prefix-monitor" });
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
 
 describe("Stop hook finalization", () => {
