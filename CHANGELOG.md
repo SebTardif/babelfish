@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Refresh Vitest to 5.0.3, Node typings to 26.6.4, and their transitive development dependencies while retaining Node.js 22.19 support.
+- Bound session monitor lines and queued context to 1 MiB while preserving long-running monitors across consumed turns, UTF-8 decoding, carriage-return breaks, and final lines without a newline. Thanks @SebTardif.
 
 ## 0.1.1 — 2026-10-01
 

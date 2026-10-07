@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import readline from "node:readline";
+import { appendMonitorContext, createMonitorOutputReader, MAX_MONITOR_OUTPUT_BYTES } from "./monitor-output.js";
 import { resolveConfig } from "./config.js";
 import {
   hookAdditionalContext,
@@ -222,15 +222,24 @@ async function startMonitors(
         child.kill();
         continue;
       }
-      const lines = readline.createInterface({ input: child.stdout });
-      lines.on("line", (line) => {
+      const output = createMonitorOutputReader((line) => {
         const text = line.trim();
-        if (!text) return;
-        if (!monitorProcesses.get(key)?.includes(child)) return;
-        const pending = monitorContext.get(key) ?? [];
-        pending.push(`${monitor.description}: ${text}`);
-        monitorContext.set(key, pending.slice(-50));
+        if (!text || !monitorProcesses.get(key)?.includes(child)) return;
+        monitorContext.set(key, appendMonitorContext(
+          monitorContext.get(key) ?? [], `${monitor.description}: ${text}`,
+        ));
+      }, () => {
+        warn(
+          `Babelfish monitor ${plugin.key}/${monitor.name} exceeded the ${MAX_MONITOR_OUTPUT_BYTES}-byte line limit`,
+        );
+        terminateShellProcessTree(child);
+        setTimeout(() => {
+          terminateShellProcessTree(child, process.platform, "SIGKILL");
+        }, 250).unref();
       });
+      child.stdout.on("data", (chunk: Buffer) => output.write(chunk));
+      child.stdout.on("end", () => output.end());
+      child.stdout.on("close", () => output.end());
     }
   }
   if (children.length === 0) {

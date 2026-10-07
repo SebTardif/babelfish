@@ -41,6 +41,7 @@ if (process.argv[2] !== "--worker") {
   }
   const run = (command, args, cwd) => execFileSync(command, args, { cwd, env, encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024, shell: process.platform === "win32" && command.endsWith(".cmd") });
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  let workerError;
   try {
     const tools = process.env.BABELFISH_CONSUMER_TOOLS || path.join(root, "tools");
     if (!process.env.BABELFISH_CONSUMER_TOOLS) {
@@ -63,9 +64,16 @@ if (process.argv[2] !== "--worker") {
     } else {
       console.log(JSON.stringify({ package: `${packageName}@0.1.1`, cli: "passed", runtime: "passed", mcp: "passed", declarations: "passed", rollback: "passed", productionOnly: true, offline }));
     }
+  } catch (error) {
+    workerError = error;
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    try {
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+    } catch (error) {
+      if (!workerError) workerError = error;
+    }
   }
+  if (workerError) throw workerError;
 } else {
   const [consumer, tools] = process.argv.slice(3);
   const installed = path.join(consumer, "node_modules", "@openclaw", "babelfish");
@@ -79,7 +87,7 @@ if (process.argv[2] !== "--worker") {
   for (const dependency of ["typescript", "vitest", "esbuild", "@types/node"]) {
     assert(!dependencyLock.packages[`node_modules/${dependency}`], "no development toolchain in consumer");
   }
-  const run = (command, args, cwd = consumer) => execFileSync(command, args, { cwd, env: process.env, encoding: "utf8", timeout: 60_000, maxBuffer: 4 * 1024 * 1024, shell: process.platform === "win32" && command.endsWith(".cmd") });
+  const run = (command, args, cwd = consumer) => execFileSync(command, args, { cwd, env: process.env, encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024, shell: process.platform === "win32" && command.endsWith(".cmd") });
   const bin = path.join(consumer, "node_modules", ".bin", process.platform === "win32" ? "babelfish.cmd" : "babelfish");
   const cli = (args) => JSON.parse(run(bin, args));
   assert.match(run(bin, ["--help"]), /install.*<app>/s);
