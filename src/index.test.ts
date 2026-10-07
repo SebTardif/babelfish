@@ -1,20 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { MAX_HOOK_OUTPUT_BYTES } from "./bundle-plugins.js";
+import { MAX_MONITOR_OUTPUT_BYTES } from "./monitor-output.js";
 
 async function removeTemp(root: string): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      await fs.rm(root, { recursive: true, force: true });
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") throw error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  await fs.rm(root, { recursive: true, force: true });
+  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }
 
 async function copyFixture(target: string): Promise<void> {
@@ -408,12 +398,12 @@ describe("native OpenClaw hook entry", () => {
     }
   }, 30_000); // Covers cold Python and multiple Windows supervisor launches.
 
-  it("terminates a monitor that exceeds the hook output limit", async () => {
+  it("terminates a monitor that exceeds the monitor line limit", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-monitor-cap-"));
     const plugin = path.join(root, "claude-code", "monitor-plugin");
     const scriptPath = path.join(plugin, "flood.cjs");
     const pidPath = path.join(root, "pid");
-    const bytes = MAX_HOOK_OUTPUT_BYTES + 8192;
+    const bytes = MAX_MONITOR_OUTPUT_BYTES + 8192;
     vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
     vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "empty-hermes"));
     const warn = vi.fn();
@@ -458,7 +448,7 @@ describe("native OpenClaw hook entry", () => {
       }, { timeout: 10_000 });
       await vi.waitFor(() => {
         expect(warn).toHaveBeenCalledWith(
-          expect.stringContaining(`${MAX_HOOK_OUTPUT_BYTES}-byte output limit`),
+          expect.stringContaining(`${MAX_MONITOR_OUTPUT_BYTES}-byte line limit`),
         );
       }, { timeout: 10_000 });
       await vi.waitFor(() => {
@@ -522,16 +512,78 @@ describe("native OpenClaw hook entry", () => {
         const pid = Number(await fs.readFile(pidPath, "utf8"));
         expect(() => process.kill(pid, 0)).toThrow();
       }, { timeout: 10_000 });
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      await expect(hooks.get("agent_turn_prepare")?.({}, { sessionId: "line-monitor" })).resolves.toEqual({
-        prependContext: ["Status: cr-one", "Status: cr-two", "Status: é", "Status: final"].join("\n\n"),
-      });
+      const delivered: string[] = [];
+      await vi.waitFor(async () => {
+        const result = await hooks.get("agent_turn_prepare")?.({}, { sessionId: "line-monitor" }) as { prependContext?: string } | undefined;
+        if (result?.prependContext) delivered.push(result.prependContext);
+        expect(delivered.join("\n\n")).toBe(
+          ["Status: cr-one", "Status: cr-two", "Status: é", "Status: final"].join("\n\n"),
+        );
+      }, { timeout: 10_000 });
     } finally {
       await hooks?.get("session_end")?.({ sessionId: "line-monitor" }, { sessionId: "line-monitor" });
       vi.unstubAllEnvs();
       await removeTemp(root);
     }
   }, 20_000);
+
+  it("keeps a healthy monitor alive across consumed turns exceeding 1 MiB", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-monitor-turns-"));
+    const plugin = path.join(root, "claude-code", "monitor-plugin");
+    const pidPath = path.join(root, "pid");
+    const triggerPath = path.join(root, "next");
+    vi.stubEnv("OPENCLAW_BABELFISH_ROOT", root);
+    vi.stubEnv("OPENCLAW_BABELFISH_HERMES_PLUGIN_DIR", path.join(root, "empty-hermes"));
+    const warn = vi.fn();
+    const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+    try {
+      await fs.mkdir(path.join(root, "empty-hermes"), { recursive: true });
+      await fs.mkdir(path.join(plugin, ".claude-plugin"), { recursive: true });
+      await fs.mkdir(path.join(plugin, "monitors"), { recursive: true });
+      await fs.writeFile(path.join(plugin, "turns.cjs"), `
+        const fs = require("node:fs");
+        fs.writeFileSync(process.argv[2], String(process.pid));
+        const emit = (turn) => {
+          for (let i = 0; i < 75; i++) process.stdout.write("x".repeat(32768) + "\\n");
+          process.stdout.write("ready-" + turn + "\\n");
+        };
+        emit(1);
+        const timer = setInterval(() => {
+          if (fs.existsSync(process.argv[3])) { clearInterval(timer); emit(2); setInterval(() => {}, 1000); }
+        }, 10);
+      `);
+      const quote = (value: string) => process.platform === "win32" ? `"${value.replaceAll('"', '""')}"` : JSON.stringify(value);
+      const command = process.platform === "win32"
+        ? `node "%CLAUDE_PLUGIN_ROOT%\\turns.cjs" ${quote(pidPath)} ${quote(triggerPath)}`
+        : `${quote(process.execPath)} ${quote(path.join(plugin, "turns.cjs"))} ${quote(pidPath)} ${quote(triggerPath)}`;
+      await fs.writeFile(path.join(plugin, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "monitor-plugin" }));
+      await fs.writeFile(path.join(plugin, "monitors", "monitors.json"), JSON.stringify([{ name: "status", description: "Status", command }]));
+      vi.resetModules();
+      const entry = (await import("./index.js")).default;
+      entry.register({
+        on: (name, handler) => { hooks.set(name, handler); },
+        registerTool: () => undefined, registerCommand: () => undefined,
+        registerCli: () => undefined, registerAgentToolResultMiddleware: () => undefined,
+        logger: { warn },
+      });
+      const ctx = { sessionId: "turn-monitor", workspaceDir: root };
+      await hooks.get("session_start")?.({}, ctx);
+      for (let turn = 1; turn <= 2; turn += 1) {
+        if (turn === 2) await fs.writeFile(triggerPath, "next");
+        await vi.waitFor(async () => {
+          const result = await hooks.get("agent_turn_prepare")?.({}, ctx) as { prependContext?: string } | undefined;
+          expect(result?.prependContext).toContain(`Status: ready-${turn}`);
+        }, { timeout: 10_000 });
+        const pid = Number(await fs.readFile(pidPath, "utf8"));
+        expect(() => process.kill(pid, 0)).not.toThrow();
+      }
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await hooks.get("session_end")?.({}, { sessionId: "turn-monitor" });
+      vi.unstubAllEnvs();
+      await removeTemp(root);
+    }
+  }, 30_000);
 
   it("keeps a complete line in the chunk that crosses the output limit", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-monitor-prefix-"));
@@ -551,7 +603,7 @@ describe("native OpenClaw hook entry", () => {
         fs.writeFileSync(process.argv[2], String(process.pid));
         process.stdout.write(Buffer.concat([
           Buffer.from("ready\\n"),
-          Buffer.alloc(${MAX_HOOK_OUTPUT_BYTES}, 0x41),
+          Buffer.alloc(${MAX_MONITOR_OUTPUT_BYTES + 1}, 0x41),
         ]));
         setInterval(() => {}, 1000);
       `);
@@ -586,7 +638,7 @@ describe("native OpenClaw hook entry", () => {
         expect(pid).toBeGreaterThan(0);
       }, { timeout: 10_000 });
       await vi.waitFor(() => {
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${MAX_HOOK_OUTPUT_BYTES}-byte output limit`));
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${MAX_MONITOR_OUTPUT_BYTES}-byte line limit`));
       }, { timeout: 10_000 });
       await vi.waitFor(() => {
         expect(() => process.kill(pid, 0)).toThrow();
