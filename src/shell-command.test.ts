@@ -148,6 +148,24 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("does not treat a dotted or slashed command as a reserved word", () => {
+    const dotted = ": \"$(case.helper in 2>/dev/null)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    const slashed = ": \"$(case/helper in 2>/dev/null)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(dotted, () => "deny", "linux")).toBe(
+      ": \"$(case.helper in 2>/dev/null)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+    expect(expandSingleQuotedShellVariables(slashed, () => "deny", "linux")).toBe(
+      ": \"$(case/helper in 2>/dev/null)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("recognizes a comment after a closing parenthesis", () => {
+    const command = "if [ \"$( (true)# don't skip\nprintf %s '${FLAG}')\" = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \"$( (true)# don't skip\nprintf %s 'deny')\" = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
   it("does not treat a hyphenated command as a reserved word", () => {
     const command = ": \"$(case-helper in 2>/dev/null)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(

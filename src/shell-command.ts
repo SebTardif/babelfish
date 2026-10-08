@@ -18,7 +18,8 @@ function commentStarts(command: string, index: number): boolean {
   if (index === 0) return true;
   const previous = command[index - 1] ?? "";
   return previous === " " || previous === "\t" || previous === "\n"
-    || previous === ";" || previous === "|" || previous === "&" || previous === "(";
+    || previous === ";" || previous === "|" || previous === "&"
+    || previous === "(" || previous === ")";
 }
 
 type CasePhase = "subject" | "pattern" | "body";
@@ -376,7 +377,7 @@ export function expandSingleQuotedShellVariables(
         continue;
       }
     }
-    if (platform !== "win32" && !quoted && /[A-Za-z0-9_-]/.test(character)) word += character;
+    if (platform !== "win32" && !quoted && /[A-Za-z0-9_./-]/.test(character)) word += character;
     else if (!quoted) {
       flushWord();
       if (character === ";" || character === "|" || character === "&" || character === "{") {
