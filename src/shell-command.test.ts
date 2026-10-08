@@ -89,6 +89,25 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("leaves quote characters in an unquoted here-document for the shell", () => {
+    const command = "cat <<EOF\n'${FLAG}'\nEOF\n";
+    expect(expandSingleQuotedShellVariables(command, () => "den'y", "linux")).toBe(command);
+  });
+
+  it("treats a partly quoted delimiter as a quoted here-document", () => {
+    const command = "cat <<E'OF'\n${FLAG}\nEOF\n";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "cat <<E'OF'\ndeny\nEOF\n",
+    );
+  });
+
+  it("starts a here-document body after a comment on the header line", () => {
+    const command = "cat <<'EOF' # note\n${FLAG}\nEOF\n";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "cat <<'EOF' # note\ndeny\nEOF\n",
+    );
+  });
+
   it("leaves a bare name in an unquoted here-document for the shell", () => {
     const command = "cat <<EOF\n${FLAG}\nEOF\n";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(command);

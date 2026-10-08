@@ -51,24 +51,48 @@ function parseHereHeader(command: string, index: number): { cursor: number; doc:
   while (command[cursor] === " " || command[cursor] === "\t") cursor += 1;
   let delimiter = "";
   let quoted = false;
-  const quote = command[cursor];
-  if (quote === "'" || quote === "\"") {
-    const endQuote = command.indexOf(quote, cursor + 1);
-    if (endQuote === -1) return null;
-    delimiter = command.slice(cursor + 1, endQuote);
-    cursor = endQuote + 1;
-    quoted = true;
-  } else {
-    if (quote === "\\") {
-      cursor += 1;
+  while (cursor < command.length) {
+    const mark = command[cursor] ?? "";
+    if (mark === "'" || mark === "\"") {
+      const endQuote = command.indexOf(mark, cursor + 1);
+      if (endQuote === -1) return null;
+      delimiter += command.slice(cursor + 1, endQuote);
+      cursor = endQuote + 1;
       quoted = true;
+      continue;
     }
-    const start = cursor;
-    while (cursor < command.length && !/[\s;&|<>()]/.test(command[cursor] ?? "")) cursor += 1;
-    delimiter = command.slice(start, cursor);
-    if (!delimiter) return null;
+    if (mark === "\\") {
+      const next = command[cursor + 1];
+      if (next === undefined || next === "\n") break;
+      delimiter += next;
+      cursor += 2;
+      quoted = true;
+      continue;
+    }
+    if (/[\s;&|<>()]/.test(mark)) break;
+    delimiter += mark;
+    cursor += 1;
   }
+  if (!delimiter) return null;
   return { cursor, doc: { delimiter, stripTabs, quoted } };
+}
+
+function appendPendingHereDocs(
+  command: string,
+  index: number,
+  frame: QuoteFrame,
+  out: string,
+  resolve: (name: string) => string | undefined,
+): { out: string; index: number } {
+  while (frame.pendingDocs.length > 0) {
+    const doc = frame.pendingDocs.shift()!;
+    const split = splitHereBody(command, index, doc);
+    const body = command.slice(index, split.bodyEnd);
+    out += doc.quoted ? expandQuotedHereBody(body, resolve) : body;
+    out += command.slice(split.bodyEnd, split.end);
+    index = split.end;
+  }
+  return { out, index };
 }
 
 function expandQuotedHereBody(
@@ -190,6 +214,11 @@ export function expandSingleQuotedShellVariables(
       frame.commandPosition = true;
       out += command.slice(index, end);
       index = end;
+      if (newline !== -1) {
+        const drained = appendPendingHereDocs(command, index, frame, out, resolve);
+        out = drained.out;
+        index = drained.index;
+      }
       continue;
     }
     if (platform !== "win32" && !quoted && command.startsWith("<<", index)) {
@@ -207,16 +236,9 @@ export function expandSingleQuotedShellVariables(
       out += "\n";
       index += 1;
       frame.commandPosition = true;
-      while (frame.pendingDocs.length > 0) {
-        const doc = frame.pendingDocs.shift()!;
-        const split = splitHereBody(command, index, doc);
-        const body = command.slice(index, split.bodyEnd);
-        out += doc.quoted
-          ? expandQuotedHereBody(body, resolve)
-          : expandSingleQuotedShellVariables(body, resolve, platform);
-        out += command.slice(split.bodyEnd, split.end);
-        index = split.end;
-      }
+      const drained = appendPendingHereDocs(command, index, frame, out, resolve);
+      out = drained.out;
+      index = drained.index;
       continue;
     }
     if (platform !== "win32" && !quoted && command.startsWith(";;", index) && frame.caseStack.at(-1) === "body") {
