@@ -26,7 +26,10 @@ type CasePhase = "subject" | "pattern" | "body";
 type HereDoc = {
   delimiter: string;
   stripTabs: boolean;
+  quoted: boolean;
 };
+
+const OPENS_COMMAND = new Set(["if", "then", "else", "elif", "while", "until", "do"]);
 
 type QuoteFrame = {
   inSingle: boolean;
@@ -47,20 +50,35 @@ function parseHereHeader(command: string, index: number): { cursor: number; doc:
   }
   while (command[cursor] === " " || command[cursor] === "\t") cursor += 1;
   let delimiter = "";
+  let quoted = false;
   const quote = command[cursor];
   if (quote === "'" || quote === "\"") {
     const endQuote = command.indexOf(quote, cursor + 1);
     if (endQuote === -1) return null;
     delimiter = command.slice(cursor + 1, endQuote);
     cursor = endQuote + 1;
+    quoted = true;
   } else {
-    if (quote === "\\") cursor += 1;
+    if (quote === "\\") {
+      cursor += 1;
+      quoted = true;
+    }
     const start = cursor;
     while (cursor < command.length && !/[\s;&|<>()]/.test(command[cursor] ?? "")) cursor += 1;
     delimiter = command.slice(start, cursor);
     if (!delimiter) return null;
   }
-  return { cursor, doc: { delimiter, stripTabs } };
+  return { cursor, doc: { delimiter, stripTabs, quoted } };
+}
+
+function expandQuotedHereBody(
+  body: string,
+  resolve: (name: string) => string | undefined,
+): string {
+  return body.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string) => {
+    const value = resolve(name);
+    return value === undefined ? match : value;
+  });
 }
 
 function splitHereBody(command: string, start: number, doc: HereDoc): { bodyEnd: number; end: number } {
@@ -80,13 +98,22 @@ function splitHereBody(command: string, start: number, doc: HereDoc): { bodyEnd:
 }
 
 function noteShellWord(frame: QuoteFrame, word: string): void {
-  if (word === "case" && frame.commandPosition) frame.caseStack.push("subject");
-  else if (word === "in" && frame.caseStack.at(-1) === "subject") {
-    frame.caseStack[frame.caseStack.length - 1] = "pattern";
-  } else if (word === "esac" && frame.commandPosition && frame.caseStack.length > 0) {
-    frame.caseStack.pop();
+  if (word === "case" && frame.commandPosition) {
+    frame.caseStack.push("subject");
+    frame.commandPosition = false;
+    return;
   }
-  frame.commandPosition = false;
+  if (word === "in" && frame.caseStack.at(-1) === "subject") {
+    frame.caseStack[frame.caseStack.length - 1] = "pattern";
+    frame.commandPosition = false;
+    return;
+  }
+  if (word === "esac" && frame.commandPosition && frame.caseStack.length > 0) {
+    frame.caseStack.pop();
+    frame.commandPosition = false;
+    return;
+  }
+  frame.commandPosition = frame.commandPosition && OPENS_COMMAND.has(word);
 }
 
 // Values already inside single quotes are inserted here. The shell never
@@ -183,7 +210,10 @@ export function expandSingleQuotedShellVariables(
       while (frame.pendingDocs.length > 0) {
         const doc = frame.pendingDocs.shift()!;
         const split = splitHereBody(command, index, doc);
-        out += expandSingleQuotedShellVariables(command.slice(index, split.bodyEnd), resolve, platform);
+        const body = command.slice(index, split.bodyEnd);
+        out += doc.quoted
+          ? expandQuotedHereBody(body, resolve)
+          : expandSingleQuotedShellVariables(body, resolve, platform);
         out += command.slice(split.bodyEnd, split.end);
         index = split.end;
       }
@@ -280,7 +310,9 @@ export function expandSingleQuotedShellVariables(
     if (platform !== "win32" && !quoted && /[A-Za-z0-9_]/.test(character)) word += character;
     else if (!quoted) {
       flushWord();
-      if (character === ";" || character === "|" || character === "&") frame.commandPosition = true;
+      if (character === ";" || character === "|" || character === "&" || character === "{") {
+        frame.commandPosition = true;
+      }
     }
     out += character;
     index += 1;

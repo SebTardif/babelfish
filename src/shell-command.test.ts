@@ -75,6 +75,25 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("keeps command position after then", () => {
+    const command = "if [ \"$(if true; then case x in x) printf %s '${FLAG}';; esac; fi)\" = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \"$(if true; then case x in x) printf %s 'deny';; esac; fi)\" = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("inserts a bare name inside a quoted here-document", () => {
+    const command = "if [ \"$(cat <<'EOF'\n${FLAG}\nEOF\n)\" = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \"$(cat <<'EOF'\ndeny\nEOF\n)\" = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("leaves a bare name in an unquoted here-document for the shell", () => {
+    const command = "cat <<EOF\n${FLAG}\nEOF\n";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(command);
+  });
+
   it("inserts a single-quoted name inside a quoted here-document", () => {
     const command = "sh <<'EOF'\nif [ '${FLAG}' = deny ]; then exit 2; fi\nexit 0\nEOF\n";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
