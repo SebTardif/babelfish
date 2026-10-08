@@ -14,6 +14,13 @@ const windowsJobScript = fileURLToPath(
 
 const SHELL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+function commentStarts(command: string, index: number): boolean {
+  if (index === 0) return true;
+  const previous = command[index - 1] ?? "";
+  return previous === " " || previous === "\t" || previous === "\n"
+    || previous === ";" || previous === "|" || previous === "&" || previous === "(";
+}
+
 type QuoteFrame = {
   inSingle: boolean;
   inDouble: boolean;
@@ -63,6 +70,25 @@ export function expandSingleQuotedShellVariables(
       const next = command[index + 1];
       out += next === undefined ? character : `${character}${next}`;
       index += next === undefined ? 1 : 2;
+      continue;
+    }
+    if (platform !== "win32" && !frame.inSingle && !frame.inDouble && character === "\\") {
+      const next = command[index + 1];
+      out += next === undefined ? character : `${character}${next}`;
+      index += next === undefined ? 1 : 2;
+      continue;
+    }
+    if (
+      platform !== "win32"
+      && !frame.inSingle
+      && !frame.inDouble
+      && character === "#"
+      && commentStarts(command, index)
+    ) {
+      const newline = command.indexOf("\n", index);
+      const end = newline === -1 ? command.length : newline + 1;
+      out += command.slice(index, end);
+      index = end;
       continue;
     }
     if (!frame.inSingle && command.startsWith("$(", index)) {

@@ -54,6 +54,18 @@ describe("expandSingleQuotedShellVariables", () => {
     )).toBe("$(printf %s 'a'\\''b')");
   });
 
+  it("ignores an apostrophe inside a shell comment", () => {
+    const command = "# don't skip guard\nif [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "# don't skip guard\nif [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("does not treat an unquoted escape as the start of a quote", () => {
+    const command = ": \\'; if [ \"" + "${FLAG}" + "\" = \"den'y\" ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "inserted", "linux")).toBe(command);
+  });
+
   it("copies an apostrophe into a Windows command without a POSIX escape", () => {
     expect(expandSingleQuotedShellVariables(
       "if '${FLAG}'=='den'y' exit /b 2",

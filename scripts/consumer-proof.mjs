@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -12,39 +12,6 @@ const compilerVersion = "7.0.2";
 const nodeTypesVersion = "26.6.3";
 const script = fileURLToPath(import.meta.url);
 const packageRoot = path.resolve(path.dirname(script), "..");
-
-function stopProcessesIn(root) {
-  if (process.platform !== "win32") return;
-  const literal = root.replaceAll("'", "''");
-  const command = [
-    `$root = '${literal}'`,
-    "Get-CimInstance Win32_Process | Where-Object {",
-    "  $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($root)",
-    "} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
-  ].join("; ");
-  spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
-    timeout: 20_000,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-}
-
-async function removeConsumerTree(root) {
-  let lastError;
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    try {
-      await fs.rm(root, { recursive: true, force: true });
-      return;
-    } catch (error) {
-      lastError = error;
-      const code = error && error.code;
-      if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") throw error;
-      stopProcessesIn(root);
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-  }
-  throw lastError;
-}
 
 if (process.argv[2] !== "--worker") {
   const target = process.argv[2];
@@ -101,7 +68,7 @@ if (process.argv[2] !== "--worker") {
     workerError = error;
   } finally {
     try {
-      await removeConsumerTree(root);
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
     } catch (error) {
       if (!workerError) workerError = error;
     }
