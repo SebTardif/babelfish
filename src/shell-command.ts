@@ -39,6 +39,7 @@ type QuoteFrame = {
   caseStack: CasePhase[];
   commandPosition: boolean;
   pendingDocs: HereDoc[];
+  literalHere: boolean;
 };
 
 function parseHereHeader(command: string, index: number): { cursor: number; doc: HereDoc } | null {
@@ -53,11 +54,34 @@ function parseHereHeader(command: string, index: number): { cursor: number; doc:
   let quoted = false;
   while (cursor < command.length) {
     const mark = command[cursor] ?? "";
-    if (mark === "'" || mark === "\"") {
-      const endQuote = command.indexOf(mark, cursor + 1);
+    if (mark === "'") {
+      const endQuote = command.indexOf("'", cursor + 1);
       if (endQuote === -1) return null;
       delimiter += command.slice(cursor + 1, endQuote);
       cursor = endQuote + 1;
+      quoted = true;
+      continue;
+    }
+    if (mark === "\"") {
+      let text = "";
+      let scan = cursor + 1;
+      let closed = false;
+      while (scan < command.length) {
+        if (command[scan] === "\\" && command[scan + 1] !== undefined) {
+          text += command[scan + 1];
+          scan += 2;
+          continue;
+        }
+        if (command[scan] === "\"") {
+          closed = true;
+          break;
+        }
+        text += command[scan];
+        scan += 1;
+      }
+      if (!closed) return null;
+      delimiter += text;
+      cursor = scan + 1;
       quoted = true;
       continue;
     }
@@ -73,7 +97,7 @@ function parseHereHeader(command: string, index: number): { cursor: number; doc:
     delimiter += mark;
     cursor += 1;
   }
-  if (!delimiter) return null;
+  if (!delimiter && !quoted) return null;
   return { cursor, doc: { delimiter, stripTabs, quoted } };
 }
 
@@ -83,12 +107,15 @@ function appendPendingHereDocs(
   frame: QuoteFrame,
   out: string,
   resolve: (name: string) => string | undefined,
+  platform: NodeJS.Platform,
 ): { out: string; index: number } {
   while (frame.pendingDocs.length > 0) {
     const doc = frame.pendingDocs.shift()!;
     const split = splitHereBody(command, index, doc);
     const body = command.slice(index, split.bodyEnd);
-    out += doc.quoted ? expandQuotedHereBody(body, resolve) : body;
+    out += doc.quoted
+      ? expandQuotedHereBody(body, resolve)
+      : expandSingleQuotedShellVariables(body, resolve, platform, { literalHere: true });
     out += command.slice(split.bodyEnd, split.end);
     index = split.end;
   }
@@ -149,6 +176,7 @@ export function expandSingleQuotedShellVariables(
   command: string,
   resolve: (name: string) => string | undefined,
   platform: NodeJS.Platform = process.platform,
+  options: { literalHere?: boolean } = {},
 ): string {
   const stack: QuoteFrame[] = [{
     inSingle: false,
@@ -158,6 +186,7 @@ export function expandSingleQuotedShellVariables(
     caseStack: [],
     commandPosition: true,
     pendingDocs: [],
+    literalHere: options.literalHere === true,
   }];
   let out = "";
   let word = "";
@@ -170,14 +199,14 @@ export function expandSingleQuotedShellVariables(
     const frame = stack[stack.length - 1]!;
     const character = command[index] ?? "";
     const quoted = frame.inSingle || frame.inDouble;
-    if (!frame.inDouble && character === "'") {
+    if (!frame.literalHere && !frame.inDouble && character === "'") {
       if (!frame.inSingle) flushWord();
       frame.inSingle = !frame.inSingle;
       out += character;
       index += 1;
       continue;
     }
-    if (!frame.inSingle && character === "\"") {
+    if (!frame.literalHere && !frame.inSingle && character === "\"") {
       if (!frame.inDouble) flushWord();
       frame.inDouble = !frame.inDouble;
       out += character;
@@ -204,6 +233,7 @@ export function expandSingleQuotedShellVariables(
     }
     if (
       platform !== "win32"
+      && !frame.literalHere
       && !frame.inSingle
       && !frame.inDouble
       && character === "#"
@@ -215,13 +245,13 @@ export function expandSingleQuotedShellVariables(
       out += command.slice(index, end);
       index = end;
       if (newline !== -1) {
-        const drained = appendPendingHereDocs(command, index, frame, out, resolve);
+        const drained = appendPendingHereDocs(command, index, frame, out, resolve, platform);
         out = drained.out;
         index = drained.index;
       }
       continue;
     }
-    if (platform !== "win32" && !quoted && command.startsWith("<<", index)) {
+    if (platform !== "win32" && !frame.literalHere && !quoted && command.startsWith("<<", index)) {
       flushWord();
       const header = parseHereHeader(command, index);
       if (header) {
@@ -236,7 +266,7 @@ export function expandSingleQuotedShellVariables(
       out += "\n";
       index += 1;
       frame.commandPosition = true;
-      const drained = appendPendingHereDocs(command, index, frame, out, resolve);
+      const drained = appendPendingHereDocs(command, index, frame, out, resolve, platform);
       out = drained.out;
       index = drained.index;
       continue;
@@ -259,6 +289,7 @@ export function expandSingleQuotedShellVariables(
         caseStack: [],
         commandPosition: true,
         pendingDocs: [],
+        literalHere: false,
       });
       out += "$(";
       index += 2;
@@ -274,6 +305,7 @@ export function expandSingleQuotedShellVariables(
         caseStack: [],
         commandPosition: true,
         pendingDocs: [],
+        literalHere: false,
       });
       out += character;
       index += 1;

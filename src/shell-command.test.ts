@@ -89,6 +89,27 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("inserts a single-quoted name inside a command substitution in an unquoted here-document", () => {
+    const command = "if [ \"$(cat <<EOF\n$(printf %s '${FLAG}')\nEOF\n)\" = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \"$(cat <<EOF\n$(printf %s 'deny')\nEOF\n)\" = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("accepts an empty quoted here-document delimiter", () => {
+    const command = "cat <<'' >/dev/null\n'\n\nif [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "cat <<'' >/dev/null\n'\n\nif [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("honors an escaped quote in a double-quoted here-document delimiter", () => {
+    const command = "if [ \"$(cat <<\"E\\\"OF\"\n${FLAG}\nE\"OF\n)\" = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \"$(cat <<\"E\\\"OF\"\ndeny\nE\"OF\n)\" = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
   it("leaves quote characters in an unquoted here-document for the shell", () => {
     const command = "cat <<EOF\n'${FLAG}'\nEOF\n";
     expect(expandSingleQuotedShellVariables(command, () => "den'y", "linux")).toBe(command);
