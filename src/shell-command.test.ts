@@ -148,6 +148,20 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("consumes command position when the executable is quoted", () => {
+    const command = ": \"$('echo' case in)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      ": \"$('echo' case in)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("starts a case arm in command position", () => {
+    const command = "if [ \"$(case x in x) case y in y) printf %s '${FLAG}';; esac;; esac)\" = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \"$(case x in x) case y in y) printf %s 'deny';; esac;; esac)\" = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
   it("does not treat case and in arguments as shell syntax", () => {
     const command = ": \"$(printf '%s' case in)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(

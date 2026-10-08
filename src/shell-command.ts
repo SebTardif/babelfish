@@ -201,6 +201,7 @@ export function expandSingleQuotedShellVariables(
     const quoted = frame.inSingle || frame.inDouble;
     if (!frame.literalHere && !frame.inDouble && character === "'") {
       if (!frame.inSingle) flushWord();
+      else frame.commandPosition = false;
       frame.inSingle = !frame.inSingle;
       out += character;
       index += 1;
@@ -208,6 +209,7 @@ export function expandSingleQuotedShellVariables(
     }
     if (!frame.literalHere && !frame.inSingle && character === "\"") {
       if (!frame.inDouble) flushWord();
+      else frame.commandPosition = false;
       frame.inDouble = !frame.inDouble;
       out += character;
       index += 1;
@@ -334,6 +336,7 @@ export function expandSingleQuotedShellVariables(
       flushWord();
       if (frame.caseStack.at(-1) === "pattern") {
         frame.caseStack[frame.caseStack.length - 1] = "body";
+        frame.commandPosition = true;
         out += character;
         index += 1;
         continue;
