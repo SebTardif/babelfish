@@ -14,44 +14,96 @@ const windowsJobScript = fileURLToPath(
 
 const SHELL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+type QuoteFrame = {
+  inSingle: boolean;
+  inDouble: boolean;
+  paren: number;
+  backtick: boolean;
+};
+
 // Values already inside single quotes are inserted here. The shell never
 // expands ${NAME} in single quotes, and a raw insert would let a quote in
-// the value close the string.
+// the value close a POSIX string. A $(...) or backtick command starts a new
+// quote context, including when the outer command is double-quoted. cmd.exe
+// treats apostrophes as ordinary characters, so Windows copies the value.
 export function expandSingleQuotedShellVariables(
   command: string,
   resolve: (name: string) => string | undefined,
+  platform: NodeJS.Platform = process.platform,
 ): string {
+  const stack: QuoteFrame[] = [{
+    inSingle: false,
+    inDouble: false,
+    paren: 0,
+    backtick: false,
+  }];
   let out = "";
-  let inSingle = false;
-  let inDouble = false;
   for (let index = 0; index < command.length;) {
+    const frame = stack[stack.length - 1]!;
     const character = command[index] ?? "";
-    if (!inDouble && character === "'") {
-      inSingle = !inSingle;
+    if (!frame.inDouble && character === "'") {
+      frame.inSingle = !frame.inSingle;
       out += character;
       index += 1;
       continue;
     }
-    if (!inSingle && character === "\"") {
-      inDouble = !inDouble;
+    if (!frame.inSingle && character === "\"") {
+      frame.inDouble = !frame.inDouble;
       out += character;
       index += 1;
       continue;
     }
-    if (inDouble && character === "\\") {
+    if (frame.inDouble && character === "\\") {
       const next = command[index + 1];
       out += next === undefined ? character : `${character}${next}`;
       index += next === undefined ? 1 : 2;
+      continue;
+    }
+    if (frame.backtick && !frame.inSingle && character === "\\") {
+      const next = command[index + 1];
+      out += next === undefined ? character : `${character}${next}`;
+      index += next === undefined ? 1 : 2;
+      continue;
+    }
+    if (!frame.inSingle && command.startsWith("$(", index)) {
+      stack.push({ inSingle: false, inDouble: false, paren: 1, backtick: false });
+      out += "$(";
+      index += 2;
+      continue;
+    }
+    if (!frame.inSingle && !frame.backtick && character === "`") {
+      stack.push({ inSingle: false, inDouble: false, paren: 0, backtick: true });
+      out += character;
+      index += 1;
+      continue;
+    }
+    if (frame.backtick && !frame.inSingle && character === "`") {
+      stack.pop();
+      out += character;
+      index += 1;
+      continue;
+    }
+    if (frame.paren > 0 && !frame.inSingle && !frame.inDouble && character === "(") {
+      frame.paren += 1;
+      out += character;
+      index += 1;
+      continue;
+    }
+    if (frame.paren > 0 && !frame.inSingle && !frame.inDouble && character === ")") {
+      frame.paren -= 1;
+      out += character;
+      index += 1;
+      if (frame.paren === 0) stack.pop();
       continue;
     }
     if (command.startsWith("${", index)) {
       const end = command.indexOf("}", index + 2);
       const name = end === -1 ? "" : command.slice(index + 2, end);
       if (end !== -1 && SHELL_NAME.test(name)) {
-        if (inSingle) {
+        if (frame.inSingle) {
           const value = resolve(name);
           if (value !== undefined) {
-            out += value.replaceAll("'", "'\\''");
+            out += platform === "win32" ? value : value.replaceAll("'", "'\\''");
             index = end + 1;
             continue;
           }

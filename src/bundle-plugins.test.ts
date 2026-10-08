@@ -378,6 +378,60 @@ process.exitCode = ${code};
     }
   });
 
+  it.skipIf(process.platform === "win32")("still blocks a single-quoted guard inside a command substitution", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-nested-quote-"));
+    const plugin = path.join(rootDir, "codex", "fixture");
+    const previous = process.env.BABELFISH_TEST_FLAG;
+    process.env.BABELFISH_TEST_FLAG = "deny";
+    try {
+      await fs.mkdir(path.join(plugin, ".codex-plugin"), { recursive: true });
+      const command = "if [ \"$(printf %s '${BABELFISH_TEST_FLAG}')\" = deny ]; then exit 2; fi; exit 0";
+      await fs.writeFile(path.join(plugin, ".codex-plugin", "plugin.json"), JSON.stringify({
+        hooks: { PreToolUse: [{ hooks: [{ type: "command", command }] }] },
+      }));
+      const config = {
+        rootDir, installDir: path.join(rootDir, "hermes"), python: "python3",
+        timeoutMs: fixtureTimeoutMs, env: {},
+      };
+      await expect(invokeBundleHooks(config, "PreToolUse", {})).resolves.toEqual([
+        { decision: "block", reason: expect.any(String) },
+      ]);
+      process.env.BABELFISH_TEST_FLAG = "allow";
+      await expect(invokeBundleHooks(config, "PreToolUse", {})).resolves.toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.BABELFISH_TEST_FLAG;
+      else process.env.BABELFISH_TEST_FLAG = previous;
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== "win32")("still blocks a cmd comparison when the flag contains an apostrophe", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-cmd-apostrophe-"));
+    const plugin = path.join(rootDir, "codex", "fixture");
+    const previous = process.env.BABELFISH_TEST_FLAG;
+    process.env.BABELFISH_TEST_FLAG = "den'y";
+    try {
+      await fs.mkdir(path.join(plugin, ".codex-plugin"), { recursive: true });
+      const command = "if '${BABELFISH_TEST_FLAG}'=='den'y' exit /b 2";
+      await fs.writeFile(path.join(plugin, ".codex-plugin", "plugin.json"), JSON.stringify({
+        hooks: { PreToolUse: [{ hooks: [{ type: "command", command }] }] },
+      }));
+      const config = {
+        rootDir, installDir: path.join(rootDir, "hermes"), python: "python3",
+        timeoutMs: fixtureTimeoutMs, env: {},
+      };
+      await expect(invokeBundleHooks(config, "PreToolUse", {})).resolves.toEqual([
+        { decision: "block", reason: expect.any(String) },
+      ]);
+      process.env.BABELFISH_TEST_FLAG = "allow";
+      await expect(invokeBundleHooks(config, "PreToolUse", {})).resolves.toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.BABELFISH_TEST_FLAG;
+      else process.env.BABELFISH_TEST_FLAG = previous;
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(process.platform === "win32")("does not execute a quote hidden in a single-quoted variable", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-single-break-"));
     const plugin = path.join(rootDir, "codex", "fixture");

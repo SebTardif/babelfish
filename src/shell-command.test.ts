@@ -21,9 +21,45 @@ describe("expandSingleQuotedShellVariables", () => {
   });
 
   it("inserts a single-quoted variable and escapes quotes in the value", () => {
-    expect(expandSingleQuotedShellVariables("echo '${FLAG}'", () => "den'y")).toBe(
+    expect(expandSingleQuotedShellVariables("echo '${FLAG}'", () => "den'y", "linux")).toBe(
       "echo 'den'\\''y'",
     );
+  });
+
+  it("inserts a single-quoted name inside a double-quoted command substitution", () => {
+    const command = "if [ \"$(printf %s '${FLAG}')\" = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \"$(printf %s 'deny')\" = deny ]; then exit 2; fi; exit 0",
+    );
+    expect(expandSingleQuotedShellVariables(
+      "if [ \"`printf %s '${FLAG}'`\" = deny ]; then exit 2; fi",
+      () => "deny",
+      "linux",
+    )).toBe("if [ \"`printf %s 'deny'`\" = deny ]; then exit 2; fi");
+  });
+
+  it("leaves a double-quoted name inside a command substitution for the shell", () => {
+    expect(expandSingleQuotedShellVariables(
+      'echo "$(printf %s "${FLAG}")"',
+      () => "deny",
+      "linux",
+    )).toBe('echo "$(printf %s "${FLAG}")"');
+  });
+
+  it("escapes an apostrophe inside a nested POSIX command substitution", () => {
+    expect(expandSingleQuotedShellVariables(
+      "$(printf %s '${FLAG}')",
+      () => "a'b",
+      "linux",
+    )).toBe("$(printf %s 'a'\\''b')");
+  });
+
+  it("copies an apostrophe into a Windows command without a POSIX escape", () => {
+    expect(expandSingleQuotedShellVariables(
+      "if '${FLAG}'=='den'y' exit /b 2",
+      () => "den'y",
+      "win32",
+    )).toBe("if 'den'y'=='den'y' exit /b 2");
   });
 
   it("keeps a single-quoted name the resolver does not supply", () => {
