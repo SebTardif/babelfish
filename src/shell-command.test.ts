@@ -61,6 +61,20 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("ignores an apostrophe inside a quoted here-document", () => {
+    const command = "cat <<'EOF' >/dev/null\n'\nEOF\nif [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "cat <<'EOF' >/dev/null\n'\nEOF\nif [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("keeps a command substitution open across a case pattern", () => {
+    const command = "if [ \"$(case x in x) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \"$(case x in x) printf %s 'deny';; esac)\" = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
   it("does not treat an unquoted escape as the start of a quote", () => {
     const command = ": \\'; if [ \"" + "${FLAG}" + "\" = \"den'y\" ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "inserted", "linux")).toBe(command);

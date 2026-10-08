@@ -21,12 +21,58 @@ function commentStarts(command: string, index: number): boolean {
     || previous === ";" || previous === "|" || previous === "&" || previous === "(";
 }
 
+type CasePhase = "subject" | "pattern" | "body";
+
 type QuoteFrame = {
   inSingle: boolean;
   inDouble: boolean;
   paren: number;
   backtick: boolean;
+  caseStack: CasePhase[];
 };
+
+function readHereDocument(command: string, index: number): number | null {
+  let cursor = index + 2;
+  let stripTabs = false;
+  if (command[cursor] === "-") {
+    stripTabs = true;
+    cursor += 1;
+  }
+  while (command[cursor] === " " || command[cursor] === "\t") cursor += 1;
+  let delimiter = "";
+  const quote = command[cursor];
+  if (quote === "'" || quote === "\"") {
+    const endQuote = command.indexOf(quote, cursor + 1);
+    if (endQuote === -1) return null;
+    delimiter = command.slice(cursor + 1, endQuote);
+    cursor = endQuote + 1;
+  } else {
+    const start = cursor;
+    while (cursor < command.length && !/[\s;&|<>()]/.test(command[cursor] ?? "")) cursor += 1;
+    delimiter = command.slice(start, cursor);
+    if (!delimiter) return null;
+  }
+  const lineEnd = command.indexOf("\n", cursor);
+  if (lineEnd === -1) return command.length;
+  let scan = lineEnd + 1;
+  while (scan <= command.length) {
+    const next = command.indexOf("\n", scan);
+    const lineEndIndex = next === -1 ? command.length : next;
+    let line = command.slice(scan, lineEndIndex);
+    if (stripTabs) line = line.replace(/^\t+/, "");
+    if (line === delimiter) return next === -1 ? command.length : next + 1;
+    if (next === -1) return command.length;
+    scan = next + 1;
+  }
+  return command.length;
+}
+
+function noteShellWord(frame: QuoteFrame, word: string): void {
+  if (word === "case") frame.caseStack.push("subject");
+  else if (word === "in" && frame.caseStack.at(-1) === "subject") {
+    frame.caseStack[frame.caseStack.length - 1] = "pattern";
+  } else if (word === "esac" && frame.caseStack.length > 0) frame.caseStack.pop();
+}
 
 // Values already inside single quotes are inserted here. The shell never
 // expands ${NAME} in single quotes, and a raw insert would let a quote in
@@ -43,18 +89,28 @@ export function expandSingleQuotedShellVariables(
     inDouble: false,
     paren: 0,
     backtick: false,
+    caseStack: [],
   }];
   let out = "";
+  let word = "";
+  const flushWord = (): void => {
+    if (!word) return;
+    noteShellWord(stack[stack.length - 1]!, word);
+    word = "";
+  };
   for (let index = 0; index < command.length;) {
     const frame = stack[stack.length - 1]!;
     const character = command[index] ?? "";
+    const quoted = frame.inSingle || frame.inDouble;
     if (!frame.inDouble && character === "'") {
+      if (!frame.inSingle) flushWord();
       frame.inSingle = !frame.inSingle;
       out += character;
       index += 1;
       continue;
     }
     if (!frame.inSingle && character === "\"") {
+      if (!frame.inDouble) flushWord();
       frame.inDouble = !frame.inDouble;
       out += character;
       index += 1;
@@ -91,14 +147,32 @@ export function expandSingleQuotedShellVariables(
       index = end;
       continue;
     }
+    if (platform !== "win32" && !quoted && command.startsWith("<<", index)) {
+      flushWord();
+      const end = readHereDocument(command, index);
+      if (end !== null) {
+        out += command.slice(index, end);
+        index = end;
+        continue;
+      }
+    }
+    if (platform !== "win32" && !quoted && command.startsWith(";;", index) && frame.caseStack.at(-1) === "body") {
+      flushWord();
+      frame.caseStack[frame.caseStack.length - 1] = "pattern";
+      out += ";;";
+      index += 2;
+      continue;
+    }
     if (!frame.inSingle && command.startsWith("$(", index)) {
-      stack.push({ inSingle: false, inDouble: false, paren: 1, backtick: false });
+      flushWord();
+      stack.push({ inSingle: false, inDouble: false, paren: 1, backtick: false, caseStack: [] });
       out += "$(";
       index += 2;
       continue;
     }
     if (!frame.inSingle && !frame.backtick && character === "`") {
-      stack.push({ inSingle: false, inDouble: false, paren: 0, backtick: true });
+      flushWord();
+      stack.push({ inSingle: false, inDouble: false, paren: 0, backtick: true, caseStack: [] });
       out += character;
       index += 1;
       continue;
@@ -109,13 +183,21 @@ export function expandSingleQuotedShellVariables(
       index += 1;
       continue;
     }
-    if (frame.paren > 0 && !frame.inSingle && !frame.inDouble && character === "(") {
+    if (frame.paren > 0 && !quoted && character === "(") {
+      flushWord();
       frame.paren += 1;
       out += character;
       index += 1;
       continue;
     }
-    if (frame.paren > 0 && !frame.inSingle && !frame.inDouble && character === ")") {
+    if (frame.paren > 0 && !quoted && character === ")") {
+      flushWord();
+      if (frame.caseStack.at(-1) === "pattern") {
+        frame.caseStack[frame.caseStack.length - 1] = "body";
+        out += character;
+        index += 1;
+        continue;
+      }
       frame.paren -= 1;
       out += character;
       index += 1;
@@ -139,6 +221,8 @@ export function expandSingleQuotedShellVariables(
         continue;
       }
     }
+    if (platform !== "win32" && !quoted && /[A-Za-z0-9_]/.test(character)) word += character;
+    else if (!quoted) flushWord();
     out += character;
     index += 1;
   }
