@@ -23,15 +23,22 @@ function commentStarts(command: string, index: number): boolean {
 
 type CasePhase = "subject" | "pattern" | "body";
 
+type HereDoc = {
+  delimiter: string;
+  stripTabs: boolean;
+};
+
 type QuoteFrame = {
   inSingle: boolean;
   inDouble: boolean;
   paren: number;
   backtick: boolean;
   caseStack: CasePhase[];
+  commandPosition: boolean;
+  pendingDocs: HereDoc[];
 };
 
-function readHereDocument(command: string, index: number): number | null {
+function parseHereHeader(command: string, index: number): { cursor: number; doc: HereDoc } | null {
   let cursor = index + 2;
   let stripTabs = false;
   if (command[cursor] === "-") {
@@ -47,31 +54,39 @@ function readHereDocument(command: string, index: number): number | null {
     delimiter = command.slice(cursor + 1, endQuote);
     cursor = endQuote + 1;
   } else {
+    if (quote === "\\") cursor += 1;
     const start = cursor;
     while (cursor < command.length && !/[\s;&|<>()]/.test(command[cursor] ?? "")) cursor += 1;
     delimiter = command.slice(start, cursor);
     if (!delimiter) return null;
   }
-  const lineEnd = command.indexOf("\n", cursor);
-  if (lineEnd === -1) return command.length;
-  let scan = lineEnd + 1;
+  return { cursor, doc: { delimiter, stripTabs } };
+}
+
+function splitHereBody(command: string, start: number, doc: HereDoc): { bodyEnd: number; end: number } {
+  let scan = start;
   while (scan <= command.length) {
     const next = command.indexOf("\n", scan);
-    const lineEndIndex = next === -1 ? command.length : next;
-    let line = command.slice(scan, lineEndIndex);
-    if (stripTabs) line = line.replace(/^\t+/, "");
-    if (line === delimiter) return next === -1 ? command.length : next + 1;
-    if (next === -1) return command.length;
+    const lineEnd = next === -1 ? command.length : next;
+    let line = command.slice(scan, lineEnd);
+    if (doc.stripTabs) line = line.replace(/^\t+/, "");
+    if (line === doc.delimiter) {
+      return { bodyEnd: scan, end: next === -1 ? command.length : next + 1 };
+    }
+    if (next === -1) return { bodyEnd: command.length, end: command.length };
     scan = next + 1;
   }
-  return command.length;
+  return { bodyEnd: command.length, end: command.length };
 }
 
 function noteShellWord(frame: QuoteFrame, word: string): void {
-  if (word === "case") frame.caseStack.push("subject");
+  if (word === "case" && frame.commandPosition) frame.caseStack.push("subject");
   else if (word === "in" && frame.caseStack.at(-1) === "subject") {
     frame.caseStack[frame.caseStack.length - 1] = "pattern";
-  } else if (word === "esac" && frame.caseStack.length > 0) frame.caseStack.pop();
+  } else if (word === "esac" && frame.commandPosition && frame.caseStack.length > 0) {
+    frame.caseStack.pop();
+  }
+  frame.commandPosition = false;
 }
 
 // Values already inside single quotes are inserted here. The shell never
@@ -90,6 +105,8 @@ export function expandSingleQuotedShellVariables(
     paren: 0,
     backtick: false,
     caseStack: [],
+    commandPosition: true,
+    pendingDocs: [],
   }];
   let out = "";
   let word = "";
@@ -143,36 +160,69 @@ export function expandSingleQuotedShellVariables(
     ) {
       const newline = command.indexOf("\n", index);
       const end = newline === -1 ? command.length : newline + 1;
+      frame.commandPosition = true;
       out += command.slice(index, end);
       index = end;
       continue;
     }
     if (platform !== "win32" && !quoted && command.startsWith("<<", index)) {
       flushWord();
-      const end = readHereDocument(command, index);
-      if (end !== null) {
-        out += command.slice(index, end);
-        index = end;
+      const header = parseHereHeader(command, index);
+      if (header) {
+        frame.pendingDocs.push(header.doc);
+        out += command.slice(index, header.cursor);
+        index = header.cursor;
         continue;
       }
+    }
+    if (platform !== "win32" && !quoted && character === "\n") {
+      flushWord();
+      out += "\n";
+      index += 1;
+      frame.commandPosition = true;
+      while (frame.pendingDocs.length > 0) {
+        const doc = frame.pendingDocs.shift()!;
+        const split = splitHereBody(command, index, doc);
+        out += expandSingleQuotedShellVariables(command.slice(index, split.bodyEnd), resolve, platform);
+        out += command.slice(split.bodyEnd, split.end);
+        index = split.end;
+      }
+      continue;
     }
     if (platform !== "win32" && !quoted && command.startsWith(";;", index) && frame.caseStack.at(-1) === "body") {
       flushWord();
       frame.caseStack[frame.caseStack.length - 1] = "pattern";
+      frame.commandPosition = true;
       out += ";;";
       index += 2;
       continue;
     }
     if (!frame.inSingle && command.startsWith("$(", index)) {
       flushWord();
-      stack.push({ inSingle: false, inDouble: false, paren: 1, backtick: false, caseStack: [] });
+      stack.push({
+        inSingle: false,
+        inDouble: false,
+        paren: 1,
+        backtick: false,
+        caseStack: [],
+        commandPosition: true,
+        pendingDocs: [],
+      });
       out += "$(";
       index += 2;
       continue;
     }
     if (!frame.inSingle && !frame.backtick && character === "`") {
       flushWord();
-      stack.push({ inSingle: false, inDouble: false, paren: 0, backtick: true, caseStack: [] });
+      stack.push({
+        inSingle: false,
+        inDouble: false,
+        paren: 0,
+        backtick: true,
+        caseStack: [],
+        commandPosition: true,
+        pendingDocs: [],
+      });
       out += character;
       index += 1;
       continue;
@@ -185,7 +235,13 @@ export function expandSingleQuotedShellVariables(
     }
     if (frame.paren > 0 && !quoted && character === "(") {
       flushWord();
+      if (frame.caseStack.at(-1) === "pattern") {
+        out += character;
+        index += 1;
+        continue;
+      }
       frame.paren += 1;
+      frame.commandPosition = true;
       out += character;
       index += 1;
       continue;
@@ -222,7 +278,10 @@ export function expandSingleQuotedShellVariables(
       }
     }
     if (platform !== "win32" && !quoted && /[A-Za-z0-9_]/.test(character)) word += character;
-    else if (!quoted) flushWord();
+    else if (!quoted) {
+      flushWord();
+      if (character === ";" || character === "|" || character === "&") frame.commandPosition = true;
+    }
     out += character;
     index += 1;
   }

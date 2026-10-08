@@ -68,6 +68,34 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("keeps parsing the command after a here-document redirection", () => {
+    const command = "cat <<'EOF' >/dev/null; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0\ntext\nEOF\n";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "cat <<'EOF' >/dev/null; if [ 'deny' = deny ]; then exit 2; fi; exit 0\ntext\nEOF\n",
+    );
+  });
+
+  it("inserts a single-quoted name inside a quoted here-document", () => {
+    const command = "sh <<'EOF'\nif [ '${FLAG}' = deny ]; then exit 2; fi\nexit 0\nEOF\n";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "sh <<'EOF'\nif [ 'deny' = deny ]; then exit 2; fi\nexit 0\nEOF\n",
+    );
+  });
+
+  it("does not treat a parenthesized case pattern as a substitution", () => {
+    const command = ": \"$(case x in (x) :;; esac)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      ": \"$(case x in (x) :;; esac)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("does not treat case and in arguments as shell syntax", () => {
+    const command = ": \"$(printf '%s' case in)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      ": \"$(printf '%s' case in)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
   it("keeps a command substitution open across a case pattern", () => {
     const command = "if [ \"$(case x in x) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
