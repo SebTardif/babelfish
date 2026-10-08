@@ -148,6 +148,20 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("does not treat a hyphenated command as a reserved word", () => {
+    const command = ": \"$(case-helper in 2>/dev/null)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      ": \"$(case-helper in 2>/dev/null)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("inserts a placeholder after an unquoted backslash", () => {
+    const command = "if [ \\${FLAG} = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \\deny = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
   it("consumes command position when the executable is quoted", () => {
     const command = ": \"$('echo' case in)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(

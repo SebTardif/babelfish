@@ -229,6 +229,18 @@ export function expandSingleQuotedShellVariables(
     }
     if (platform !== "win32" && !frame.inSingle && !frame.inDouble && character === "\\") {
       const next = command[index + 1];
+      if (next === "$" && command.startsWith("${", index + 1)) {
+        const end = command.indexOf("}", index + 3);
+        const name = end === -1 ? "" : command.slice(index + 3, end);
+        if (end !== -1 && SHELL_NAME.test(name)) {
+          const value = resolve(name);
+          if (value !== undefined) {
+            out += `\\${value}`;
+            index = end + 1;
+            continue;
+          }
+        }
+      }
       out += next === undefined ? character : `${character}${next}`;
       index += next === undefined ? 1 : 2;
       continue;
@@ -364,7 +376,7 @@ export function expandSingleQuotedShellVariables(
         continue;
       }
     }
-    if (platform !== "win32" && !quoted && /[A-Za-z0-9_]/.test(character)) word += character;
+    if (platform !== "win32" && !quoted && /[A-Za-z0-9_-]/.test(character)) word += character;
     else if (!quoted) {
       flushWord();
       if (character === ";" || character === "|" || character === "&" || character === "{") {
