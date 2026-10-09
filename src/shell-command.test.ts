@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
@@ -73,6 +74,28 @@ describe("expandSingleQuotedShellVariables", () => {
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
       "cat <<'EOF' >/dev/null; if [ 'deny' = deny ]; then exit 2; fi; exit 0\ntext\nEOF\n",
     );
+  });
+
+  it("closes an empty case before the following guard", () => {
+    const command = ": \"$(case x in esac)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    const expanded = expandSingleQuotedShellVariables(command, () => "deny", "linux");
+    expect(expanded).toBe(
+      ": \"$(case x in esac)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+    if (process.platform === "win32") return;
+    const result = spawnSync("/bin/sh", ["-lc", expanded], { encoding: "utf8" });
+    expect(result.status).toBe(2);
+  });
+
+  it("keeps esac as data inside a case arm", () => {
+    const command = ": \"$(case x in x) echo esac;; esac)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    const expanded = expandSingleQuotedShellVariables(command, () => "deny", "linux");
+    expect(expanded).toBe(
+      ": \"$(case x in x) echo esac;; esac)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+    if (process.platform === "win32") return;
+    const result = spawnSync("/bin/sh", ["-lc", expanded], { encoding: "utf8" });
+    expect(result.status).toBe(2);
   });
 
   it("keeps command position after then", () => {

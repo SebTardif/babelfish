@@ -179,10 +179,14 @@ function noteShellWord(frame: QuoteFrame, word: string): void {
     frame.commandPosition = false;
     return;
   }
-  if (word === "esac" && frame.commandPosition && frame.caseStack.length > 0) {
-    frame.caseStack.pop();
-    frame.commandPosition = false;
-    return;
+  if (word === "esac" && frame.caseStack.length > 0) {
+    const phase = frame.caseStack.at(-1);
+    // `case x in esac` is still in the pattern list, so command position is false.
+    if (phase === "pattern" || (phase === "body" && frame.commandPosition)) {
+      frame.caseStack.pop();
+      frame.commandPosition = false;
+      return;
+    }
   }
   frame.commandPosition = frame.commandPosition && OPENS_COMMAND.has(word);
 }
