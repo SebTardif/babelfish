@@ -148,6 +148,20 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("treats an empty quoted suffix as part of the same word", () => {
+    const command = ": \"$(case\"\" in 2>/dev/null)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      ": \"$(case\"\" in 2>/dev/null)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("keeps command position after pipeline negation", () => {
+    const command = "if [ \"$( ! case x in x) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \"$( ! case x in x) printf %s 'deny';; esac)\" = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
   it("does not treat a plus-signed command as a reserved word", () => {
     const command = ": \"$(case+helper in 2>/dev/null)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(

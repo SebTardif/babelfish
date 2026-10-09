@@ -159,6 +159,10 @@ function noteShellWord(frame: QuoteFrame, word: string): void {
     frame.commandPosition = true;
     return;
   }
+  if (word === "!" && frame.commandPosition) {
+    frame.commandPosition = true;
+    return;
+  }
   if (word === "case" && frame.commandPosition) {
     frame.caseStack.push("subject");
     frame.commandPosition = false;
@@ -200,26 +204,28 @@ export function expandSingleQuotedShellVariables(
   }];
   let out = "";
   let word = "";
+  let wordQuoted = false;
   const flushWord = (): void => {
-    if (!word) return;
-    noteShellWord(stack[stack.length - 1]!, word);
+    if (!word && !wordQuoted) return;
+    const frame = stack[stack.length - 1]!;
+    if (!frame.literalHere && !wordQuoted) noteShellWord(frame, word);
+    else if (!frame.literalHere) frame.commandPosition = false;
     word = "";
+    wordQuoted = false;
   };
   for (let index = 0; index < command.length;) {
     const frame = stack[stack.length - 1]!;
     const character = command[index] ?? "";
     const quoted = frame.inSingle || frame.inDouble;
     if (!frame.literalHere && !frame.inDouble && character === "'") {
-      if (!frame.inSingle) flushWord();
-      else frame.commandPosition = false;
+      wordQuoted = true;
       frame.inSingle = !frame.inSingle;
       out += character;
       index += 1;
       continue;
     }
     if (!frame.literalHere && !frame.inSingle && character === "\"") {
-      if (!frame.inDouble) flushWord();
-      else frame.commandPosition = false;
+      wordQuoted = true;
       frame.inDouble = !frame.inDouble;
       out += character;
       index += 1;
@@ -386,8 +392,9 @@ export function expandSingleQuotedShellVariables(
         continue;
       }
     }
-    if (platform !== "win32" && !quoted && !/[\s;&|()<>]/.test(character)) word += character;
-    else if (!quoted) {
+    if (platform !== "win32" && !frame.literalHere && (quoted || !/[\s;&|()<>]/.test(character))) {
+      word += character;
+    } else if (!quoted) {
       flushWord();
       if (character === ";" || character === "|" || character === "&" || character === "{") {
         frame.commandPosition = true;
