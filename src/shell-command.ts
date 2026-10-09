@@ -13,6 +13,11 @@ const windowsJobScript = fileURLToPath(
 );
 
 const SHELL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const WIN_INSERTED_DOLLAR = "$\u0000";
+
+function shieldWindowsValue(value: string): string {
+  return value.replaceAll("${", `${WIN_INSERTED_DOLLAR}{`);
+}
 
 function commentStarts(command: string, index: number): boolean {
   if (index === 0) return true;
@@ -150,6 +155,10 @@ function splitHereBody(command: string, start: number, doc: HereDoc): { bodyEnd:
 }
 
 function noteShellWord(frame: QuoteFrame, word: string): void {
+  if (word === "{") {
+    frame.commandPosition = true;
+    return;
+  }
   if (word === "case" && frame.commandPosition) {
     frame.caseStack.push("subject");
     frame.commandPosition = false;
@@ -367,7 +376,7 @@ export function expandSingleQuotedShellVariables(
         if (frame.inSingle) {
           const value = resolve(name);
           if (value !== undefined) {
-            out += platform === "win32" ? value : value.replaceAll("'", "'\\''");
+            out += platform === "win32" ? shieldWindowsValue(value) : value.replaceAll("'", "'\\''");
             index = end + 1;
             continue;
           }
@@ -377,7 +386,7 @@ export function expandSingleQuotedShellVariables(
         continue;
       }
     }
-    if (platform !== "win32" && !quoted && /[A-Za-z0-9_./-]/.test(character)) word += character;
+    if (platform !== "win32" && !quoted && !/[\s;&|()<>]/.test(character)) word += character;
     else if (!quoted) {
       flushWord();
       if (character === ";" || character === "|" || character === "&" || character === "{") {
@@ -395,7 +404,9 @@ export function commandForPlatformShell(command: string, platform: NodeJS.Platfo
   if (platform !== "win32") {
     return command;
   }
-  return command.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => `%${name}%`);
+  return command
+    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => `%${name}%`)
+    .replaceAll(WIN_INSERTED_DOLLAR, "$");
 }
 
 function windowsPowerShellPath(systemRoot = process.env.SystemRoot): string {
