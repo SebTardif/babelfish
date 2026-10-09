@@ -148,6 +148,20 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("does not treat case after a parameter expansion as syntax", () => {
+    const command = ": \"$(${CMD} case in)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      ": \"$(${CMD} case in)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
+  it("keeps an ordinary backslash in a double-quoted here-document delimiter", () => {
+    const command = "cat <<\"E\\OF\"\nEOF\n${FLAG}\nE\\OF\n";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "cat <<\"E\\OF\"\nEOF\ndeny\nE\\OF\n",
+    );
+  });
+
   it("treats an empty quoted suffix as part of the same word", () => {
     const command = ": \"$(case\"\" in 2>/dev/null)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(

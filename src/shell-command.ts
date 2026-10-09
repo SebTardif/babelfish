@@ -74,8 +74,14 @@ function parseHereHeader(command: string, index: number): { cursor: number; doc:
       let closed = false;
       while (scan < command.length) {
         if (command[scan] === "\\" && command[scan + 1] !== undefined) {
-          text += command[scan + 1];
-          scan += 2;
+          const next = command[scan + 1] ?? "";
+          if (next === "\\" || next === "$" || next === "`" || next === "\"" || next === "\n") {
+            text += next;
+            scan += 2;
+            continue;
+          }
+          text += "\\";
+          scan += 1;
           continue;
         }
         if (command[scan] === "\"") {
@@ -205,13 +211,15 @@ export function expandSingleQuotedShellVariables(
   let out = "";
   let word = "";
   let wordQuoted = false;
+  let wordExpanded = false;
   const flushWord = (): void => {
-    if (!word && !wordQuoted) return;
+    if (!word && !wordQuoted && !wordExpanded) return;
     const frame = stack[stack.length - 1]!;
-    if (!frame.literalHere && !wordQuoted) noteShellWord(frame, word);
+    if (!frame.literalHere && !wordQuoted && !wordExpanded) noteShellWord(frame, word);
     else if (!frame.literalHere) frame.commandPosition = false;
     word = "";
     wordQuoted = false;
+    wordExpanded = false;
   };
   for (let index = 0; index < command.length;) {
     const frame = stack[stack.length - 1]!;
@@ -387,6 +395,7 @@ export function expandSingleQuotedShellVariables(
             continue;
           }
         }
+        if (!frame.inSingle) wordExpanded = true;
         out += command.slice(index, end + 1);
         index = end + 1;
         continue;
