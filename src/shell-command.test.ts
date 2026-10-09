@@ -220,6 +220,16 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("inserts an escaped placeholder inside double quotes", () => {
+    const command = "if [ \"\\${FLAG}\" = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      "if [ \"deny\" = deny ]; then exit 2; fi; exit 0",
+    );
+    expect(expandSingleQuotedShellVariables(command, () => "a\"b$(c)", "linux")).toBe(
+      "if [ \"a\\\"b\\$(c)\" = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
   it("inserts a placeholder after an unquoted backslash", () => {
     const command = "if [ \\${FLAG} = deny ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(

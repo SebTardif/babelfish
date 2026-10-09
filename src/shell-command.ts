@@ -241,6 +241,19 @@ export function expandSingleQuotedShellVariables(
     }
     if (frame.inDouble && character === "\\") {
       const next = command[index + 1];
+      if (next === "$" && command.startsWith("${", index + 1)) {
+        const end = command.indexOf("}", index + 3);
+        const name = end === -1 ? "" : command.slice(index + 3, end);
+        if (end !== -1 && SHELL_NAME.test(name)) {
+          const value = resolve(name);
+          if (value !== undefined) {
+            const escaped = value.replace(/[\\$`"]/g, (mark) => `\\${mark}`);
+            out += platform === "win32" ? shieldWindowsValue(escaped) : escaped;
+            index = end + 1;
+            continue;
+          }
+        }
+      }
       out += next === undefined ? character : `${character}${next}`;
       index += next === undefined ? 1 : 2;
       continue;
