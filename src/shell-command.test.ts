@@ -220,6 +220,20 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
+  it("keeps the backslash when a Windows double-quoted placeholder is escaped", () => {
+    const command = "if \"\\${FLAG}\"==\"\\deny\" exit /b 2";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "win32")).toBe(
+      "if \"\\deny\"==\"\\deny\" exit /b 2",
+    );
+  });
+
+  it("counts a nested command substitution as the parent command word", () => {
+    const command = ": \"$($(printf echo) case in)\"; if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+    expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
+      ": \"$($(printf echo) case in)\"; if [ 'deny' = deny ]; then exit 2; fi; exit 0",
+    );
+  });
+
   it("inserts an escaped placeholder inside double quotes", () => {
     const command = "if [ \"\\${FLAG}\" = deny ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(

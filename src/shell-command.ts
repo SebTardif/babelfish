@@ -247,8 +247,8 @@ export function expandSingleQuotedShellVariables(
         if (end !== -1 && SHELL_NAME.test(name)) {
           const value = resolve(name);
           if (value !== undefined) {
-            const escaped = value.replace(/[\\$`"]/g, (mark) => `\\${mark}`);
-            out += platform === "win32" ? shieldWindowsValue(escaped) : escaped;
+            if (platform === "win32") out += `\\${shieldWindowsValue(value)}`;
+            else out += value.replace(/[\\$`"]/g, (mark) => `\\${mark}`);
             index = end + 1;
             continue;
           }
@@ -364,6 +364,7 @@ export function expandSingleQuotedShellVariables(
     }
     if (frame.backtick && !frame.inSingle && character === "`") {
       stack.pop();
+      wordExpanded = true;
       out += character;
       index += 1;
       continue;
@@ -393,7 +394,10 @@ export function expandSingleQuotedShellVariables(
       frame.paren -= 1;
       out += character;
       index += 1;
-      if (frame.paren === 0) stack.pop();
+      if (frame.paren === 0) {
+        stack.pop();
+        wordExpanded = true;
+      }
       continue;
     }
     if (command.startsWith("${", index)) {
