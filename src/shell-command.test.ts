@@ -270,7 +270,7 @@ describe("expandSingleQuotedShellVariables", () => {
   it("inserts a placeholder after an unquoted backslash", () => {
     const command = "if [ \\${FLAG} = deny ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
-      "if [ \\deny = deny ]; then exit 2; fi; exit 0",
+      "if [ 'deny' = deny ]; then exit 2; fi; exit 0",
     );
   });
 
@@ -317,6 +317,290 @@ describe("expandSingleQuotedShellVariables", () => {
 
   it("keeps a single-quoted name the resolver does not supply", () => {
     expect(expandSingleQuotedShellVariables("echo '${OTHER}'", resolve)).toBe("echo '${OTHER}'");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("executed shell variable regressions", () => {
+  const guard = "if [ '${FLAG}' = deny ]; then exit 2; fi; exit 0";
+  it.each(["\\'; printf INJECTED; #", "a\\n'b"])("keeps values literal in native dollar-quoted strings (%s)", (value) => {
+    const source = "printf '%s' $'${FLAG}'";
+    const prefix = spawnSync("/bin/sh", ["-lc", "printf '%s' $''"], { encoding: "utf8" }).stdout;
+    const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(prefix + value);
+  });
+  it.each(["$$", "\\$$", "$$$", "$\\\n$", "$\\\n$$"])("distinguishes dollar-quote introducers from parameter expansions (%s)", (prefix) => {
+    const source = `printf '<%s>' ${prefix}'\${FLAG}'`;
+    const value = "\\'; printf INJECTED; #";
+    const baseline = spawnSync("/bin/sh", ["-lc", source.replace("${FLAG}", "")], { encoding: "utf8" });
+    const expected = baseline.stdout.replace(/[0-9]+/, "").replace(">", value + ">");
+    const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout.replace(/[0-9]+/, "")).toBe(expected);
+  });
+  it.each([
+    ["esac pattern alternative", "if [ \"$(case x in x|esac) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0"],
+    ["case pattern alternative", "if [ \"$(case x in x|case) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0"],
+    ["parenthesized esac pattern", "if [ \"$(case esac in (esac) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0"],
+    ["escaped executable placeholder", `: "$(\\\${CMD} case in)"; ${guard}`],
+    ["escaped executable word", `: "$(\\echo case in)"; ${guard}`],
+    ["hash following an escaped space", `: \\ #'\${FLAG}'; ${guard}`],
+    ["arithmetic names that resemble keywords", `: "$(( case + in ))"; ${guard}`],
+    ["multiline arithmetic shift", `: "$((1 << 2\n))"; ${guard}`],
+    ["parameter fallback with nested quotes", `: "\${OTHER:-"don't"}"; ${guard}`],
+    ["brace used as an argument", `: "$(printf '%s' { case in)"; ${guard}`],
+    ["substitution joined to a reserved-word prefix", `: "$(case$(printf %s helper) in 2>/dev/null)"; ${guard}`],
+    ["parameter joined to a reserved-word prefix", `: "$(case\${SUFFIX:-helper} in 2>/dev/null)"; ${guard}`],
+    ["in used as a case subject", `: "$(case in in esac)"; ${guard}`],
+  ])("retains deny and allow decisions after %s", (_name, command) => {
+    for (const value of ["deny", "allow"]) {
+      const expanded = expandSingleQuotedShellVariables(command, (name) => name === "FLAG" ? value : "echo", "linux");
+      // macOS /bin/sh misparses unparenthesized case arms inside $(...).
+      const shell = process.platform === "darwin" ? "/bin/bash" : "/bin/sh";
+      const result = spawnSync(shell, ["-lc", expanded], {
+        encoding: "utf8", env: { ...process.env, FLAG: value, CMD: "echo" },
+      });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(value === "deny" ? 2 : 0);
+    }
+  });
+
+  it("matches the native shell's continued here-document delimiters", () => {
+    const source = `cat <<EOF\nE\\\nOF\n${guard}`;
+    for (const value of ["deny", "allow"]) {
+      const options = { encoding: "utf8" as const, env: { ...process.env, FLAG: value } };
+      const baseline = spawnSync("/bin/sh", ["-lc", source.replaceAll("${FLAG}", value)], options);
+      const expanded = expandSingleQuotedShellVariables(source, () => value, "linux");
+      const result = spawnSync("/bin/sh", ["-lc", expanded], options);
+      expect(result.status).toBe(baseline.status);
+      expect(result.stdout).toBe(baseline.stdout);
+    }
+  });
+
+  it("keeps inherited double quotes when inserting an escaped fallback value", () => {
+    const source = "printf '%s' \"${BABELFISH_OPTIONAL:-\\${FLAG}}\"";
+    const value = 'x"; $(printf INJECTED) `printf INJECTED` \\ tail';
+    const command = expandSingleQuotedShellVariables(source, (name) => name === "FLAG" ? value : undefined, "linux");
+    const env = { ...process.env };
+    delete env.BABELFISH_OPTIONAL;
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8", env });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(value);
+  });
+  it("keeps brace-matching quotes separate from fallback expansion", () => {
+    const source = "printf '%s' \"${BABELFISH_OPTIONAL:-'}'\"\\${FLAG}\"}\"";
+    const value = '$(printf INJECTED) " }';
+    const env = { ...process.env };
+    delete env.BABELFISH_OPTIONAL;
+    const baseline = spawnSync("/bin/sh", ["-lc", source.replace("${FLAG}", "SENTINEL")], { encoding: "utf8", env });
+    const command = expandSingleQuotedShellVariables(source, (name) => name === "FLAG" ? value : undefined, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8", env });
+    expect(baseline.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(baseline.stdout.replace("SENTINEL", value));
+  });
+  it("lets the shell expand apostrophes inside brace-matching quotes as data", () => {
+    const source = "printf '%s' \"${BABELFISH_OPTIONAL:-'\\${FLAG}'}\"";
+    const value = "a'b$(printf INJECTED)}";
+    const env = { ...process.env, FLAG: value };
+    delete env.BABELFISH_OPTIONAL;
+    const command = expandSingleQuotedShellVariables(source, (name) => name === "FLAG" ? value : undefined, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8", env });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("'" + value + "'");
+  });
+
+  it.each(["deny", "$(printf INJECTED)", "$(printf INJECTED)}"])("retains here-document quoting inside a fallback (%s)", (value) => {
+    const source = "cat <<EOF\n${BABELFISH_OPTIONAL:-\\${FLAG}}\nEOF";
+    const command = expandSingleQuotedShellVariables(source, (name) => name === "FLAG" ? value : undefined, "linux");
+    const env = { ...process.env };
+    delete env.BABELFISH_OPTIONAL;
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8", env });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe((value === "deny" ? "\\" : "") + value + "\n");
+  });
+
+  it.each(["#", "##", "%", "%%"])("preserves quoted parameter-removal patterns (%s)", (operator) => {
+    for (const value of ["deny", "allow"]) {
+      const input = operator.startsWith("#") ? `prefix${value}` : `${value}suffix`;
+      const pattern = operator.startsWith("#") ? "prefix" : "suffix";
+      const source = `if [ "\${VALUE${operator}'\${PATTERN}'}" = deny ]; then exit 2; fi; exit 0`;
+      const command = expandSingleQuotedShellVariables(source, (name) => name === "PATTERN" ? pattern : input, "linux");
+      const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8", env: { ...process.env, VALUE: input } });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(value === "deny" ? 2 : 0);
+    }
+  });
+
+  it.each(["'${DELIMITER}'", '"${DELIMITER}"', "${DELIMITER}"])("preserves variable here-document delimiters (%s)", (header) => {
+    for (const closing of ["END", "${DELIMITER}"]) {
+      for (const value of ["deny", "allow"]) {
+        const source = `: <<${header}\nignored\n${closing}\n${guard}`;
+        const command = expandSingleQuotedShellVariables(source, (name) => name === "DELIMITER" ? "END" : value, "linux");
+        const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8", env: { ...process.env, FLAG: value } });
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(value === "deny" ? 2 : 0);
+      }
+    }
+  });
+  it("recognizes native ANSI-C quoting in a variable here-document delimiter", () => {
+    const prefix = spawnSync("/bin/sh", ["-lc", "printf '%s' $''"], { encoding: "utf8" }).stdout;
+    for (const value of ["deny", "allow"]) {
+      const source = `: <<$'\${DELIMITER}'\nignored\n${prefix}END\n${guard}`;
+      const command = expandSingleQuotedShellVariables(source, (name) => name === "DELIMITER" ? "END" : value, "linux");
+      const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(value === "deny" ? 2 : 0);
+    }
+  });
+  it("decodes ANSI-C delimiter escape bytes when the native shell supports them", () => {
+    if (spawnSync("/bin/sh", ["-lc", "printf '%s' $''"], { encoding: "utf8" }).stdout) return;
+    for (const [header, closing] of [["$'E\\x4eD'", "END"], ["$'E\\'ND'", "E'ND"], ["$'\\303\\251'", "é"]]) {
+      const source = `: <<${header}\nignored\n${closing}\n${guard}`;
+      const command = expandSingleQuotedShellVariables(source, () => "deny", "linux");
+      const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(2);
+    }
+  });
+  it("uses native ANSI-C delimiter escape semantics before inserting values", () => {
+    if (spawnSync("/bin/sh", ["-lc", "printf '%s' $''"], { encoding: "utf8" }).stdout) return;
+    for (const header of ["$'E\\u0041D'", "$'E\\U00000041D'", "$'E\\c?D'"]) {
+      const delimiter = spawnSync("/bin/sh", ["-lc", `printf '%s' ${header}`], { encoding: "utf8" }).stdout;
+      const source = `: <<${header}\nignored\n${delimiter}\nprintf '%s' '\${FLAG}'`;
+      const value = "x'; printf INJECTED; #";
+      const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+      const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(value);
+    }
+  });
+  it("keeps delimiter values out of the native ANSI-C decoder's source", () => {
+    const prefix = spawnSync("/bin/sh", ["-lc", "printf '%s' $''"], { encoding: "utf8" }).stdout;
+    const value = "END'; printf INJECTED; #";
+    const source = `: <<$'\${DELIMITER}'\nignored\n${prefix}${value}\nprintf '%s' safe`;
+    const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("safe");
+  });
+
+  it.each(["\\${FLAG}", '"\\${FLAG}"', "'${FLAG}'", '"${FLAG}"'])(
+    "passes shell syntax as data in %s", (argument) => {
+      const value = "a'\"; $(printf INJECTED) `printf INJECTED` \\ tail";
+      const command = expandSingleQuotedShellVariables(`printf '%s' ${argument}`, () => value, "linux");
+      const result = spawnSync("/bin/sh", ["-lc", command], {
+        encoding: "utf8", env: { ...process.env, FLAG: value },
+      });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(value);
+    },
+  );
+
+  it.each([
+    "printf '%s' \"`printf '%s' '${FLAG}'`\"",
+    "printf '%s' \"`printf '%s' \\${FLAG}`\"",
+  ])("keeps substituted backticks and dollars literal in %s", (source) => {
+    const value = "x`$(printf INJECTED)`y'\\z";
+    const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(value);
+  });
+
+  it.each([
+    "printf '%s' \"`printf '%s' \\`printf '%s' '${FLAG}'\\``\"",
+    "printf '%s' \"`cat <<'EOF'\n${FLAG}\nEOF\n`\"",
+  ])("keeps nested backtick and document inserts literal in %s", (source) => {
+    const value = "x`$(printf${IFS}INJECTED)`y'\\z";
+    const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(value);
+  });
+
+  it("preserves escaped here-document values through the enclosing backtick layer", () => {
+    const value = "$(printf INJECTED)";
+    const source = "printf '%s' \"`cat <<EOF\n\\${FLAG}\nEOF\n`\"";
+    const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(value);
+  });
+
+  it.each(["deny", "a; $(printf INJECTED)\nEOF\nprintf INJECTED"])(
+    "preserves escaped text in an unquoted here-document (%s)", (value) => {
+      const source = "cat <<EOF\n\\${FLAG}\nEOF\n";
+      const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+      const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("\\" + value + "\n");
+    },
+  );
+
+  it.each(["EOF", "", "E'OF'"])("keeps inserted delimiter lines inside a quoted here-document (%s)", (delimiter) => {
+    const value = `x\n${delimiter}\nprintf INJECTED\nBABELFISH_HEREDOC\n`;
+    const quoted = "'" + delimiter.replaceAll("'", "'\\''") + "'";
+    const source = `cat <<${quoted}\n\${FLAG}\n${delimiter}\n`;
+    const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(value + "\n");
+  });
+
+  it.each(["cat <<EO\\\nF >/dev/null\nignored\nEOF\nprintf '%s' '${FLAG}'", "cat <<\"EO\\\nF\" >/dev/null\nignored\nEOF\nprintf '%s' '${FLAG}'", "cat <<\\\nEOF >/dev/null\nignored\nEOF\nprintf '%s' '${FLAG}'"])("removes continued delimiter words before locating the body (%s)", (source) => {
+    const value = "x'; printf INJECTED; #";
+    const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(value);
+  });
+
+  it("decodes legacy escape layers before identifying quotes", () => {
+    const source = "printf '%s' \"`printf '%s' \\\\'\"${FLAG}\"\\\\'`\"";
+    const value = 'x"; printf INJECTED; #';
+    const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8", env: { ...process.env, FLAG: value } });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("'" + value + "'");
+  });
+
+  it("keeps a nested guard visible after legacy dollar escape removal", () => {
+    const source = "if [ \"`printf '%s' \\$(printf '%s' '${FLAG}')`\" = deny ]; then exit 2; fi; exit 0";
+    for (const value of ["deny", "allow"]) {
+      const command = expandSingleQuotedShellVariables(source, () => value, "linux");
+      const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8", env: { ...process.env, FLAG: value } });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(value === "deny" ? 2 : 0);
+    }
+  });
+
+  it("preserves multiple here-document boundaries when both values contain their delimiters", () => {
+    const source = "cat <<'ONE' <<-'TWO'\n${FIRST}\nONE\n${SECOND}\nTWO\n";
+    const values: Record<string, string> = { FIRST: "ONE\nprintf INJECTED", SECOND: "\tTWO\nprintf INJECTED" };
+    const command = expandSingleQuotedShellVariables(source, (name) => values[name], "linux");
+    const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("TWO\nprintf INJECTED\n");
   });
 });
 
