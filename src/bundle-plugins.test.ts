@@ -378,6 +378,35 @@ process.exitCode = ${code};
     }
   });
 
+  it.skipIf(process.platform !== "win32")("preserves cmd parameter-like literals and captures shell-looking values", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-cmd-literals-"));
+    const plugin = path.join(rootDir, "codex", "fixture");
+    const previous = process.env.BABELFISH_TEST_FLAG;
+    const value = "literal $(echo marker) & echo injected>marker & apostrophe's";
+    process.env.BABELFISH_TEST_FLAG = value;
+    try {
+      await fs.mkdir(path.join(plugin, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(path.join(plugin, "capture.cjs"), "require('node:fs').writeFileSync('captured.json', JSON.stringify(process.argv.slice(2))); process.stdin.resume();");
+      const literal = "${BABELFISH_TEST_OPTIONAL:-'fallback'}";
+      await fs.writeFile(path.join(plugin, ".codex-plugin", "plugin.json"), JSON.stringify({
+        hooks: { PreToolUse: [{ hooks: [{ type: "command", command: `node capture.cjs "${literal}" "\${BABELFISH_TEST_FLAG}"` }] }] },
+      }));
+      const results = await invokeBundleHooks({
+        rootDir, installDir: path.join(rootDir, "hermes"), python: "python3",
+        timeoutMs: fixtureTimeoutMs, env: {},
+      }, "PreToolUse", {});
+      expect(results).toEqual([]);
+      const captured = JSON.parse(await fs.readFile(path.join(plugin, "captured.json"), "utf8"));
+      expect(captured).toEqual([literal, value]);
+      await expect(fs.stat(path.join(plugin, "marker"))).rejects.toThrow();
+      console.log("Windows shell receipt", JSON.stringify({ parameterLiteral: captured[0], capturedValue: captured[1], markerPresent: false }));
+    } finally {
+      if (previous === undefined) delete process.env.BABELFISH_TEST_FLAG;
+      else process.env.BABELFISH_TEST_FLAG = previous;
+      await fs.rm(rootDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    }
+  }, 30_000);
+
   it.skipIf(process.platform === "win32")("still blocks a guard after a comment that contains an apostrophe", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "babelfish-comment-quote-"));
     const plugin = path.join(rootDir, "codex", "fixture");
@@ -510,11 +539,14 @@ process.exitCode = ${code};
         rootDir, installDir: path.join(rootDir, "hermes"), python: "python3",
         timeoutMs: fixtureTimeoutMs, env: {},
       };
-      await expect(invokeBundleHooks(config, "PreToolUse", {})).resolves.toEqual([
+      const denied = await invokeBundleHooks(config, "PreToolUse", {});
+      expect(denied).toEqual([
         { decision: "block", reason: expect.any(String) },
       ]);
       process.env.BABELFISH_TEST_FLAG = "allow";
-      await expect(invokeBundleHooks(config, "PreToolUse", {})).resolves.toEqual([]);
+      const allowed = await invokeBundleHooks(config, "PreToolUse", {});
+      expect(allowed).toEqual([]);
+      console.log("Windows shell receipt", JSON.stringify({ denied: denied.length, allowed: allowed.length }));
     } finally {
       if (previous === undefined) delete process.env.BABELFISH_TEST_FLAG;
       else process.env.BABELFISH_TEST_FLAG = previous;

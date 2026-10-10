@@ -413,7 +413,7 @@ export function expandSingleQuotedShellVariables(
       index += 1;
       continue;
     }
-    if (frame.parameter && frame.quotedParameter && !frame.inDouble && character === "'" && shellPreservesParameterQuotes()) {
+    if (platform !== "win32" && frame.parameter && frame.quotedParameter && !frame.inDouble && character === "'" && shellPreservesParameterQuotes()) {
       frame.braceSingle = !frame.braceSingle;
       out += character;
       index += 1;
@@ -539,7 +539,7 @@ export function expandSingleQuotedShellVariables(
       index += 2;
       continue;
     }
-    if (!frame.inSingle && command.startsWith("$(", index)) {
+    if (platform !== "win32" && !frame.inSingle && command.startsWith("$(", index)) {
       const arithmetic = command.startsWith("$((", index);
       stack.push({
         parentWord: takeParentWord(),
@@ -615,7 +615,7 @@ export function expandSingleQuotedShellVariables(
         index = end + 1;
         continue;
       }
-      if (!frame.inSingle) {
+      if (platform !== "win32" && !frame.inSingle) {
         const pattern = /^\$\{(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*?$!_-])[#%]/.test(command.slice(index));
         stack.push({ inSingle: false, inDouble: false, paren: 0, parentWord: takeParentWord(), caseStack: [], commandPosition: false, pendingDocs: [],
           literalHere: false, arithmetic: false, parameter: true,

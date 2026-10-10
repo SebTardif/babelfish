@@ -604,6 +604,11 @@ describe.skipIf(process.platform === "win32")("executed shell variable regressio
 });
 
 describe("commandForPlatformShell", () => {
+  it("keeps cmd parameter-like text independent of POSIX parsing", () => {
+    const source = 'echo "${OPTIONAL:-\'fallback\'}"';
+    const expanded = expandSingleQuotedShellVariables(source, () => undefined, "win32");
+    expect(commandForPlatformShell(expanded, "win32")).toBe(source);
+  });
   it("leaves braced variables for the POSIX shell", () => {
     expect(commandForPlatformShell('printf "%s" "${CLAUDE_PROJECT_DIR}"', "linux")).toBe(
       'printf "%s" "${CLAUDE_PROJECT_DIR}"',
