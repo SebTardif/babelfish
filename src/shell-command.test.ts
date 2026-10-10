@@ -257,13 +257,13 @@ describe("expandSingleQuotedShellVariables", () => {
     );
   });
 
-  it("inserts an escaped placeholder inside double quotes", () => {
+  it("lets the shell expand escaped placeholders inside double quotes", () => {
     const command = "if [ \"\\${FLAG}\" = deny ]; then exit 2; fi; exit 0";
     expect(expandSingleQuotedShellVariables(command, () => "deny", "linux")).toBe(
-      "if [ \"deny\" = deny ]; then exit 2; fi; exit 0",
+      "if [ \"${FLAG}\" = deny ]; then exit 2; fi; exit 0",
     );
     expect(expandSingleQuotedShellVariables(command, () => "a\"b$(c)", "linux")).toBe(
-      "if [ \"a\\\"b\\$(c)\" = deny ]; then exit 2; fi; exit 0",
+      "if [ \"${FLAG}\" = deny ]; then exit 2; fi; exit 0",
     );
   });
 
@@ -335,7 +335,8 @@ describe.skipIf(process.platform === "win32")("executed shell variable regressio
     const source = `printf '<%s>' ${prefix}'\${FLAG}'`;
     const value = "\\'; printf INJECTED; #";
     const baseline = spawnSync("/bin/sh", ["-lc", source.replace("${FLAG}", "")], { encoding: "utf8" });
-    const expected = baseline.stdout.replace(/[0-9]+/, "").replace(">", value + ">");
+    expect(baseline.stdout.endsWith(">")).toBe(true);
+    const expected = baseline.stdout.replace(/[0-9]+/, "").slice(0, -1) + value + ">";
     const command = expandSingleQuotedShellVariables(source, () => value, "linux");
     const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8" });
     expect(result.stderr).toBe("");
@@ -343,8 +344,8 @@ describe.skipIf(process.platform === "win32")("executed shell variable regressio
     expect(result.stdout.replace(/[0-9]+/, "")).toBe(expected);
   });
   it.each([
-    ["esac pattern alternative", "if [ \"$(case x in x|esac) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0"],
-    ["case pattern alternative", "if [ \"$(case x in x|case) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0"],
+    ["esac pattern alternative", "if [ \"$(case x in (x|esac) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0"],
+    ["case pattern alternative", "if [ \"$(case x in (x|case) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0"],
     ["parenthesized esac pattern", "if [ \"$(case esac in (esac) printf %s '${FLAG}';; esac)\" = deny ]; then exit 2; fi; exit 0"],
     ["escaped executable placeholder", `: "$(\\\${CMD} case in)"; ${guard}`],
     ["escaped executable word", `: "$(\\echo case in)"; ${guard}`],
@@ -359,9 +360,7 @@ describe.skipIf(process.platform === "win32")("executed shell variable regressio
   ])("retains deny and allow decisions after %s", (_name, command) => {
     for (const value of ["deny", "allow"]) {
       const expanded = expandSingleQuotedShellVariables(command, (name) => name === "FLAG" ? value : "echo", "linux");
-      // macOS /bin/sh misparses unparenthesized case arms inside $(...).
-      const shell = process.platform === "darwin" ? "/bin/bash" : "/bin/sh";
-      const result = spawnSync(shell, ["-lc", expanded], {
+      const result = spawnSync("/bin/sh", ["-lc", expanded], {
         encoding: "utf8", env: { ...process.env, FLAG: value, CMD: "echo" },
       });
       expect(result.stderr).toBe("");
@@ -385,7 +384,7 @@ describe.skipIf(process.platform === "win32")("executed shell variable regressio
     const source = "printf '%s' \"${BABELFISH_OPTIONAL:-\\${FLAG}}\"";
     const value = 'x"; $(printf INJECTED) `printf INJECTED` \\ tail';
     const command = expandSingleQuotedShellVariables(source, (name) => name === "FLAG" ? value : undefined, "linux");
-    const env = { ...process.env };
+    const env = { ...process.env, FLAG: value };
     delete env.BABELFISH_OPTIONAL;
     const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8", env });
     expect(result.stderr).toBe("");
@@ -395,7 +394,7 @@ describe.skipIf(process.platform === "win32")("executed shell variable regressio
   it("keeps brace-matching quotes separate from fallback expansion", () => {
     const source = "printf '%s' \"${BABELFISH_OPTIONAL:-'}'\"\\${FLAG}\"}\"";
     const value = '$(printf INJECTED) " }';
-    const env = { ...process.env };
+    const env = { ...process.env, FLAG: value };
     delete env.BABELFISH_OPTIONAL;
     const baseline = spawnSync("/bin/sh", ["-lc", source.replace("${FLAG}", "SENTINEL")], { encoding: "utf8", env });
     const command = expandSingleQuotedShellVariables(source, (name) => name === "FLAG" ? value : undefined, "linux");
@@ -420,7 +419,7 @@ describe.skipIf(process.platform === "win32")("executed shell variable regressio
   it.each(["deny", "$(printf INJECTED)", "$(printf INJECTED)}"])("retains here-document quoting inside a fallback (%s)", (value) => {
     const source = "cat <<EOF\n${BABELFISH_OPTIONAL:-\\${FLAG}}\nEOF";
     const command = expandSingleQuotedShellVariables(source, (name) => name === "FLAG" ? value : undefined, "linux");
-    const env = { ...process.env };
+    const env = { ...process.env, FLAG: value };
     delete env.BABELFISH_OPTIONAL;
     const result = spawnSync("/bin/sh", ["-lc", command], { encoding: "utf8", env });
     expect(result.stderr).toBe("");

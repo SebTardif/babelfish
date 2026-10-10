@@ -448,10 +448,9 @@ export function expandSingleQuotedShellVariables(
           const value = resolve(name);
           if (value !== undefined) {
             if (platform === "win32") out += `\\${shieldWindowsValue(value)}`;
-            else if (frame.braceSingle) out += command.slice(index + 1, end + 1);
             else {
-              const literal = frame.hereParameter && !/^[\\$`"}\n]/.test(value) ? `\\${value}` : value;
-              out += literal.replace(frame.parameter ? /[\\$`"}]/g : /[\\$`"]/g, (mark) => `\\${mark}`);
+              if (frame.hereParameter && !/^[\\$`"}\n]/.test(value)) out += "\\\\";
+              out += command.slice(index + 1, end + 1);
             }
             index = end + 1;
             continue;
